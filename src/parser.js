@@ -286,4 +286,127 @@
     return true;
   }
   AP.matches = matches;
+
+  /* =====================================================================
+   * ГЛУБОКАЯ ПРОВЕРКА — разбор HTML отдельной страницы объявления и
+   * страницы продавца. Эти функции чистые (принимают строку HTML), поэтому
+   * покрыты тестами. Реальные селекторы Avito могут отличаться — тогда
+   * правятся регулярки ниже.
+   * ===================================================================== */
+
+  function decodeEntities(s) {
+    return (s || "")
+      .replace(/&amp;/gi, "&")
+      .replace(/&quot;/gi, '"')
+      .replace(/&#38;/g, "&")
+      .replace(/&#x2f;/gi, "/");
+  }
+
+  // Грубо превращаем HTML в плоский текст в нижнем регистре.
+  function stripHtml(html) {
+    return decodeEntities(
+      (html || "")
+        .replace(/<script[\s\S]*?<\/script>/gi, " ")
+        .replace(/<style[\s\S]*?<\/style>/gi, " ")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/&nbsp;/gi, " ")
+    )
+      .replace(/\s+/g, " ")
+      .toLowerCase()
+      .trim();
+  }
+  AP.stripHtml = stripHtml;
+
+  // Признаки капчи / файрвола в ответе (когда Avito отдал заглушку).
+  function isBlockedHtml(html) {
+    if (!html || html.length < 600) return true;
+    const t = html.toLowerCase();
+    return (
+      t.includes("captcha") ||
+      t.includes("firewall") ||
+      t.includes("доступ ограничен") ||
+      t.includes("подтвердите, что запросы") ||
+      t.includes("вы не робот")
+    );
+  }
+  AP.isBlockedHtml = isBlockedHtml;
+
+  // Ищем стоп-фразы («агентствам не беспокоить» и т.п.). Смотрим и в тексте,
+  // и в сыром HTML (фраза может лежать в JSON состояния страницы).
+  function findStopPhrases(html, phrases) {
+    if (!phrases || !phrases.length) return [];
+    const text = stripHtml(html) + " " + (html || "").toLowerCase().replace(/\s+/g, " ");
+    return phrases.filter((p) => p && text.indexOf(p.toLowerCase()) !== -1);
+  }
+  AP.findStopPhrases = findStopPhrases;
+
+  // Тип продавца со страницы объявления.
+  function detectSellerType(html) {
+    const t = stripHtml(html);
+    if (/агентство недвижимости|застройщик|официальный дилер|\bкомпания\b/.test(t)) return "company";
+    if (/частное лицо/.test(t)) return "private";
+    return null;
+  }
+  AP.detectSellerType = detectSellerType;
+
+  // Ссылка на профиль продавца (чтобы потом сходить и посчитать объявления).
+  function extractSellerUrl(html) {
+    const h = html || "";
+    const patterns = [
+      /data-marker="seller-link\/link"[^>]*href="([^"]+)"/i,
+      /href="([^"]+)"[^>]*data-marker="seller-link\/link"/i,
+      /href="([^"]*\/user\/[^"]*profile[^"]*)"/i,
+      /href="([^"]*\/brands\/[^"]+)"/i,
+    ];
+    for (let i = 0; i < patterns.length; i++) {
+      const m = h.match(patterns[i]);
+      if (m) return decodeEntities(m[1]);
+    }
+    return null;
+  }
+  AP.extractSellerUrl = extractSellerUrl;
+
+  // Число активных объявлений у продавца (со страницы его профиля).
+  function countSellerAds(html) {
+    const raw = html || "";
+    // Подсказки из JSON-состояния страницы.
+    const j = raw.match(/"(?:activeItemsCount|itemsCount|advertsCount|itemCount)"\s*:\s*(\d+)/i);
+    if (j) return parseInt(j[1], 10);
+
+    const t = stripHtml(raw);
+    const patterns = [
+      /активны[ехй][^0-9]{0,15}(\d[\d\s ]*)/, // "активные · 7"
+      /(\d[\d\s ]*)\s*активны/, // "7 активных"
+      /(\d[\d\s ]*)\s*объявлени[йяе]/, // "7 объявлений"
+    ];
+    for (let i = 0; i < patterns.length; i++) {
+      const m = t.match(patterns[i]);
+      if (m) {
+        const n = parseInt(m[1].replace(/[\s ]/g, ""), 10);
+        if (!isNaN(n)) return n;
+      }
+    }
+    return null;
+  }
+  AP.countSellerAds = countSellerAds;
+
+  // Итог по странице объявления.
+  function analyzeListingHtml(html, opts) {
+    opts = opts || {};
+    return {
+      stopHits: findStopPhrases(html, opts.stopPhrases || []),
+      sellerType: detectSellerType(html),
+      sellerUrl: extractSellerUrl(html),
+    };
+  }
+  AP.analyzeListingHtml = analyzeListingHtml;
+
+  // Итог по странице продавца.
+  function analyzeSellerHtml(html) {
+    return {
+      adsCount: countSellerAds(html),
+      sellerType: detectSellerType(html),
+    };
+  }
+  AP.analyzeSellerHtml = analyzeSellerHtml;
 })();

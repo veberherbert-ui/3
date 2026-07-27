@@ -20,6 +20,8 @@
   const FILTERS_KEY = "avitoParserFilters";
   const SCAN_KEY = "avitoParserScan";
   const MAX_PAGES = 50; // страховка от бесконечного обхода
+  const DEEP_CAP = 60; // максимум объявлений за одну глубокую проверку
+  const DEFAULT_STOP_PHRASES = "агентствам не беспокоить, агентства не беспокоить, без агентств, риелторам не беспокоить, риэлторам не беспокоить";
 
   // ---------- работа с chrome.storage ----------
   function storageGet(key) {
@@ -41,6 +43,7 @@
   // ---------- состояние ----------
   let panelEl = null;
   let lastResults = []; // последние показанные объявления (для копирования/CSV)
+  let deepAbort = false; // флаг остановки глубокой проверки
 
   // ---------- построение панели ----------
   function h(tag, attrs, children) {
@@ -124,13 +127,51 @@
     ]);
     body.appendChild(hideWrap);
 
-    // Кнопки действий
+    // Кнопки действий (быстрый фильтр по словам)
     const actions = h("div", { class: "ap-actions" }, [
       h("button", { id: "ap-find", class: "ap-btn ap-btn-primary", text: "Найти на этой странице" }),
       h("button", { id: "ap-scan", class: "ap-btn", text: "Сканировать все страницы" }),
       h("button", { id: "ap-stop", class: "ap-btn ap-btn-danger ap-hidden", text: "Стоп" }),
     ]);
     body.appendChild(actions);
+
+    // ---- Блок глубокой проверки ----
+    const deepBox = h("div", { class: "ap-deep" });
+    deepBox.appendChild(h("div", { class: "ap-deep-title", text: "🔬 Глубокая проверка продавца" }));
+
+    const maxAdsInput = h("input", {
+      id: "ap-max-ads",
+      class: "ap-input ap-input-sm",
+      type: "number",
+      min: "1",
+      value: "1",
+    });
+    deepBox.appendChild(
+      field("Отсеять, если у продавца объявлений больше, чем", maxAdsInput, "1 = оставить только тех, у кого 1 объект.")
+    );
+
+    const stopInput = h("textarea", {
+      id: "ap-stop-phrases",
+      class: "ap-input",
+      rows: "2",
+      placeholder: "агентствам не беспокоить, без агентств",
+    });
+    deepBox.appendChild(
+      field("Стоп-фразы на странице объявления", stopInput, "Объявления с этими фразами будут убраны из списка.")
+    );
+
+    deepBox.appendChild(
+      h("div", { class: "ap-actions" }, [
+        h("button", { id: "ap-deep", class: "ap-btn ap-btn-primary", text: "Проверить эту страницу (~20 шт)" }),
+      ])
+    );
+    deepBox.appendChild(
+      h("div", {
+        class: "ap-hint",
+        text: "Открывает каждое отобранное объявление и профиль продавца с паузами. 20 объявлений ≈ 1–2 мин.",
+      })
+    );
+    body.appendChild(deepBox);
 
     // Статус
     body.appendChild(h("div", { id: "ap-status", class: "ap-status" }));
@@ -206,6 +247,9 @@
       priceMin: numOrNull(document.getElementById("ap-price-min").value),
       priceMax: numOrNull(document.getElementById("ap-price-max").value),
       hideOthers: document.getElementById("ap-hide-others").checked,
+      maxSellerAds: Math.max(1, numOrNull(document.getElementById("ap-max-ads").value) || 1),
+      stopPhrasesRaw: document.getElementById("ap-stop-phrases").value,
+      stopPhrases: AP.splitTerms(document.getElementById("ap-stop-phrases").value),
     };
   }
 
@@ -218,6 +262,10 @@
     document.getElementById("ap-price-min").value = f.priceMin != null ? f.priceMin : "";
     document.getElementById("ap-price-max").value = f.priceMax != null ? f.priceMax : "";
     document.getElementById("ap-hide-others").checked = !!f.hideOthers;
+    document.getElementById("ap-max-ads").value = f.maxSellerAds != null ? f.maxSellerAds : 1;
+    // Стоп-фразы: если пользователь ещё не трогал — подставляем дефолт.
+    document.getElementById("ap-stop-phrases").value =
+      f.stopPhrasesRaw != null ? f.stopPhrasesRaw : DEFAULT_STOP_PHRASES;
   }
 
   function saveFilters() {
@@ -269,6 +317,19 @@
     return null;
   }
 
+  // Пометка по итогам глубокой проверки.
+  function deepBadge(parsed) {
+    const d = parsed._deep;
+    if (!d) return null;
+    if (d.status === "ok" && d.count != null)
+      return h("span", { class: "ap-badge ap-badge-owner", text: "✓ объявлений: " + d.count });
+    if (d.status === "ok-unknown" || d.status === "ok")
+      return h("span", { class: "ap-badge ap-badge-neutral", text: "✓ проверено" });
+    if (d.status === "error")
+      return h("span", { class: "ap-badge ap-badge-neutral", text: "не проверено" });
+    return null;
+  }
+
   function renderResults(hits) {
     lastResults = hits;
     const box = document.getElementById("ap-results");
@@ -296,7 +357,7 @@
         h("div", { class: "ap-res-main" }, [
           titleLink,
           h("div", { class: "ap-res-meta", text: meta.join(" · ") }),
-          h("div", { class: "ap-res-badges" }, [ownerBadge(p)]),
+          h("div", { class: "ap-res-badges" }, [ownerBadge(p), deepBadge(p)]),
         ]),
       ]);
       box.appendChild(row);
@@ -440,14 +501,178 @@
     }
   }
 
-  function toggleScanUI(running) {
+  // Кнопка «Стоп» обслуживает и сканирование страниц, и глубокую проверку.
+  async function onStop() {
+    deepAbort = true; // остановит цикл глубокой проверки после текущего шага
+    const scan = await storageGet(SCAN_KEY);
+    if (scan) {
+      await finishScan(scan, "Остановлено вручную");
+    } else {
+      setStatus("Останавливаю…", "run");
+    }
+  }
+
+  // Единый переключатель «занято»: прячем рабочие кнопки, показываем «Стоп».
+  function setBusy(running) {
     const scanBtn = document.getElementById("ap-scan");
     const stopBtn = document.getElementById("ap-stop");
     const findBtn = document.getElementById("ap-find");
+    const deepBtn = document.getElementById("ap-deep");
     if (!scanBtn) return;
     scanBtn.classList.toggle("ap-hidden", running);
     findBtn.disabled = running;
+    if (deepBtn) deepBtn.disabled = running;
     stopBtn.classList.toggle("ap-hidden", !running);
+  }
+  // Совместимость со старыми вызовами сканирования.
+  function toggleScanUI(running) {
+    setBusy(running);
+  }
+
+  // ---------- глубокая проверка (заход внутрь каждого объявления) ----------
+  function sleep(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+  function humanDelay() {
+    return 1500 + Math.floor(Math.random() * 1200); // 1.5–2.7 сек
+  }
+  function absolutize(url) {
+    try {
+      return new URL(url, location.origin).href;
+    } catch (e) {
+      return url;
+    }
+  }
+  async function fetchText(url) {
+    const res = await fetch(url, { credentials: "include", headers: { Accept: "text/html" } });
+    return await res.text();
+  }
+
+  async function deepCheck() {
+    const filters = readFilters();
+    saveFilters();
+    clearMarks();
+
+    // Кандидаты = то, что прошло фильтр по словам на текущей странице.
+    const collected = collectCurrentPage(filters, true);
+    let candidates = collected.hits;
+    if (!candidates.length) {
+      setStatus("На странице нет объявлений под фильтр — уточните ключевые слова.", "err");
+      return;
+    }
+    if (candidates.length > DEEP_CAP) candidates = candidates.slice(0, DEEP_CAP);
+
+    deepAbort = false;
+    setBusy(true);
+
+    const kept = [];
+    const removed = { agency: 0, phrase: 0, ads: 0 };
+    let unverified = 0;
+    const sellerCache = {}; // профиль продавца качаем один раз
+
+    for (let i = 0; i < candidates.length; i++) {
+      if (deepAbort) break;
+      const p = candidates[i];
+      setStatus("Глубокая проверка " + (i + 1) + " из " + candidates.length + "…", "run");
+
+      if (!p.url) {
+        unverified++;
+        p._deep = { status: "error" };
+        kept.push(p);
+        continue;
+      }
+
+      let html;
+      try {
+        html = await fetchText(p.url);
+      } catch (e) {
+        unverified++;
+        p._deep = { status: "error" };
+        kept.push(p);
+        await sleep(humanDelay());
+        continue;
+      }
+
+      if (AP.isBlockedHtml(html)) {
+        setBusy(false);
+        renderResults(kept);
+        setStatus("Авито показал проверку/капчу. Пройдите её вручную на сайте и запустите заново.", "err");
+        return;
+      }
+
+      const info = AP.analyzeListingHtml(html, { stopPhrases: filters.stopPhrases });
+
+      // Стоп-фразы → убираем совсем.
+      if (info.stopHits.length) {
+        removed.phrase++;
+        await sleep(humanDelay());
+        continue;
+      }
+      // Явное агентство на странице объявления → убираем.
+      if (info.sellerType === "company") {
+        removed.agency++;
+        await sleep(humanDelay());
+        continue;
+      }
+
+      // Считаем объявления продавца (по его профилю).
+      let count = null;
+      const sellerUrl = info.sellerUrl ? absolutize(info.sellerUrl) : null;
+      if (sellerUrl) {
+        if (Object.prototype.hasOwnProperty.call(sellerCache, sellerUrl)) {
+          count = sellerCache[sellerUrl];
+        } else {
+          await sleep(humanDelay());
+          try {
+            const sh = await fetchText(sellerUrl);
+            if (AP.isBlockedHtml(sh)) {
+              setBusy(false);
+              renderResults(kept);
+              setStatus("Авито показал капчу на странице продавца. Пройдите её и запустите заново.", "err");
+              return;
+            }
+            count = AP.analyzeSellerHtml(sh).adsCount;
+          } catch (e) {
+            count = null;
+          }
+          sellerCache[sellerUrl] = count;
+        }
+      }
+
+      if (count != null && count > filters.maxSellerAds) {
+        removed.ads++;
+        await sleep(humanDelay());
+        continue;
+      }
+
+      p._deep = { status: "ok", count: count, sellerType: info.sellerType };
+      if (count == null) p._deep.status = "ok-unknown";
+      kept.push(p);
+      await sleep(humanDelay());
+    }
+
+    setBusy(false);
+    renderResults(kept);
+    const removedTotal = removed.agency + removed.phrase + removed.ads;
+    const tail = deepAbort ? " (остановлено)" : "";
+    setStatus(
+      "Проверено: " +
+        candidates.length +
+        ". Оставлено: " +
+        kept.length +
+        ". Отсеяно: " +
+        removedTotal +
+        " (агентства " +
+        removed.agency +
+        ", стоп-фразы " +
+        removed.phrase +
+        ", много объявлений " +
+        removed.ads +
+        ")." +
+        (unverified ? " Не удалось проверить: " + unverified + "." : "") +
+        tail,
+      deepAbort ? "" : "ok"
+    );
   }
 
   // ---------- экспорт ----------
@@ -457,6 +682,7 @@
       price: p.price != null ? p.price : "",
       seller: p.seller || "",
       owner: p.isOwner === true ? "собственник" : p.isOwner === false ? "агентство?" : "?",
+      sellerAds: p._deep && p._deep.count != null ? p._deep.count : "",
       address: p.address || "",
       date: p.date || "",
       url: p.url || "",
@@ -490,8 +716,8 @@
       return;
     }
     const rows = resultsToRows();
-    const header = ["Заголовок", "Цена", "Продавец", "Тип", "Адрес", "Дата", "Ссылка"];
-    const cols = ["title", "price", "seller", "owner", "address", "date", "url"];
+    const header = ["Заголовок", "Цена", "Продавец", "Тип", "Объявлений у продавца", "Адрес", "Дата", "Ссылка"];
+    const cols = ["title", "price", "seller", "owner", "sellerAds", "address", "date", "url"];
     // ; как разделитель — так Excel в русской локали открывает без плясок.
     const csv = [header.map(csvEscape).join(";")]
       .concat(rows.map((r) => cols.map((c) => csvEscape(r[c])).join(";")))
@@ -534,13 +760,24 @@
     launcher.addEventListener("click", showPanel);
     panel.querySelector("#ap-find").addEventListener("click", doFind);
     panel.querySelector("#ap-scan").addEventListener("click", startScan);
-    panel.querySelector("#ap-stop").addEventListener("click", stopScan);
+    panel.querySelector("#ap-deep").addEventListener("click", deepCheck);
+    panel.querySelector("#ap-stop").addEventListener("click", onStop);
     panel.querySelector("#ap-copy").addEventListener("click", copyList);
     panel.querySelector("#ap-csv").addEventListener("click", downloadCsv);
     panel.querySelector("#ap-reset").addEventListener("click", resetFilters);
 
     // Сохраняем фильтры при изменении полей.
-    ["ap-include", "ap-exclude", "ap-match-all", "ap-only-owner", "ap-price-min", "ap-price-max", "ap-hide-others"].forEach(
+    [
+      "ap-include",
+      "ap-exclude",
+      "ap-match-all",
+      "ap-only-owner",
+      "ap-price-min",
+      "ap-price-max",
+      "ap-hide-others",
+      "ap-max-ads",
+      "ap-stop-phrases",
+    ].forEach(
       (id) => {
         const el = panel.querySelector("#" + id);
         el.addEventListener("change", saveFilters);
@@ -562,7 +799,7 @@
     panelEl = buildPanel();
 
     const savedFilters = await storageGet(FILTERS_KEY);
-    if (savedFilters) applyFiltersToForm(savedFilters);
+    applyFiltersToForm(savedFilters || {}); // {} → подставит дефолтные стоп-фразы
 
     const scan = await storageGet(SCAN_KEY);
     if (scan && scan.active) {

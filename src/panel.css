@@ -251,6 +251,24 @@
   background: #fdeaea;
   color: #c73c3c;
 }
+.ap-badge-neutral {
+  background: #eef0f3;
+  color: #555;
+}
+
+/* Блок глубокой проверки */
+.ap-deep {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px dashed #cbb6f0;
+  border-radius: 10px;
+  background: #faf7ff;
+}
+.ap-deep-title {
+  font-weight: 700;
+  color: #6b3fc0;
+  margin-bottom: 8px;
+}
 
 /* Пометки на карточках самой выдачи Avito */
 .ap-hit {
