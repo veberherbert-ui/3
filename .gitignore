@@ -1,3 +1,25 @@
+# Зависимости
 node_modules/
-*.zip
+vendor/
+
+# Сборка
+dist/
+build/
+out/
+*.log
+
+# Окружение
+.env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Редакторы и ОС
+.vscode/
+.idea/
 .DS_Store
+Thumbs.db
