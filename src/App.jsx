@@ -16,6 +16,7 @@ import {
 import { loadKey, saveKey, deleteKey, requestPersistence, storageEstimate } from "./lib/storage.js";
 import { shareOrDownload, readFileAsText, backupName } from "./lib/backup.js";
 import { restFor, fmtRest, stepRest } from "./lib/rest.js";
+import { workoutEnergy } from "./lib/energy.js";
 import { primeAudio, playRestOver, scheduleRestOver, cancelScheduled, vibrate, tapBuzz, releaseAudio, audioReady } from "./lib/sound.js";
 import { useWakeLock } from "./lib/wakelock.js";
 import { buildLabel, checkForUpdate, reloadOnUpdate } from "./lib/update.js";
@@ -43,6 +44,18 @@ const Chip = ({ label, value, sub, accent }) => (
 const Sheet = ({ children, onClose }) => (
   <div className="sheet-scrim fixed inset-0 z-50 flex items-end justify-center" style={{ background: "rgba(0,0,0,.55)" }} onClick={onClose}>
     <div className="sheet-panel w-full max-w-xl rounded-t-2xl p-4 max-h-[85vh] overflow-y-auto" style={{ background: C.surface }} onClick={(e) => e.stopPropagation()}>{children}</div>
+  </div>
+);
+/** Строка разбора расчёта: слева что, справа сколько и откуда. */
+const CalcLine = ({ k, v, hint }) => (
+  <div className="py-1.5" style={{ borderTop: `1px solid ${C.line}` }}>
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="f-body text-xs" style={{ color: C.dim }}>{k}</span>
+      <span className="f-num text-sm shrink-0" style={{ color: C.chalk }}>{v}</span>
+    </div>
+    {/* Пояснение слева и на всю ширину: прижатое вправо, оно ломается
+        на три рваные строки и читается хуже самой цифры. */}
+    {hint && <div className="f-body text-2xs mt-0.5" style={{ color: C.dim }}>{hint}</div>}
   </div>
 );
 const UniTag = () => (
@@ -1358,6 +1371,13 @@ const MEASURES = [
 ];
 const PCT = [[100, 1], [95, 2], [92, 3], [90, 4], [87, 5], [85, 6], [83, 7], [80, 8], [77, 9], [75, 10], [70, 12], [65, 15]];
 
+/** Откуда взялась длительность тренировки в расчёте расхода. */
+const DUR_SOURCE = {
+  timer: "по таймеру тренировки",
+  estimate: "оценка по подходам и отдыху — таймер не записал",
+  fixed: "записанное время меньше времени под нагрузкой — считаем по подходам",
+};
+
 /** Выбор своих травм и состояний. Отсюда берутся предупреждения по всему приложению. */
 function ConditionsCard({ profile, setProfile }) {
   const [open, setOpen] = useState(false);
@@ -1421,13 +1441,13 @@ function ConditionsCard({ profile, setProfile }) {
   );
 }
 
-function BodyTab({ metrics, profile, setProfile, onAdd, onDelete, workouts }) {
+function BodyTab({ metrics, profile, setProfile, onAdd, onDelete, workouts, restOverrides }) {
   const [form, setForm] = useState({ date: today() });
   const [showForm, setShowForm] = useState(false);
   const [chartKey, setChartKey] = useState("weight");
   const [showHistory, setShowHistory] = useState(false);
   const [w1, setW1] = useState(""); const [r1v, setR1v] = useState("");
-  const [dur, setDur] = useState("60"); const [intensity, setIntensity] = useState("moderate");
+  const [energyId, setEnergyId] = useState(null);
 
   const sorted = useMemo(() => [...metrics].sort((a, b) => a.date.localeCompare(b.date)), [metrics]);
   const latest = sorted[sorted.length - 1];
@@ -1459,11 +1479,16 @@ function BodyTab({ metrics, profile, setProfile, onAdd, onDelete, workouts }) {
     return null;
   }, [lbm, bodyW, profile]);
   const tdee = bmr ? Math.round(bmr * +profile.activity) : null;
-  const MET = { light: 3.5, moderate: 5.0, hard: 6.0 }[intensity];
-  const gross = bodyW && +dur ? Math.round((MET * 3.5 * bodyW / 200) * +dur) : null;
-  const restK = bmr && +dur ? Math.round((bmr / 1440) * +dur) : null;
-  const net = gross && restK ? gross - restK : null;
-  const avgDur = useMemo(() => { const d = workouts.filter((x) => x.durationMin).map((x) => x.durationMin); return d.length ? Math.round(d.reduce((a, b) => a + b, 0) / d.length) : null; }, [workouts]);
+
+  /* Расход считается по конкретной записи из журнала. По умолчанию —
+     последняя: чаще всего спрашивают именно про неё. */
+  const recent = useMemo(() => [...workouts].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 30), [workouts]);
+  const picked = recent.find((w) => w.id === energyId) || recent[0] || null;
+  const energy = useMemo(
+    () => workoutEnergy(picked, { metrics, bmr, restOverrides }),
+    [picked, metrics, bmr, restOverrides],
+  );
+  const met = energy ? energy.level.met.toFixed(1).replace(".", ",") : "";
   const tierInfo = [
     { l: "Нет данных", d: "Добавь замер веса." },
     { l: "Базовый (±30%)", d: "Только вес тела. Добавь рост и возраст." },
@@ -1576,7 +1601,7 @@ function BodyTab({ metrics, profile, setProfile, onAdd, onDelete, workouts }) {
             ))}
           </div>
         </>)}
-        <div className="f-body text-xs mt-2" style={{ color: C.dim }}>Формулы точны до ~10 повторений. Это оценка, а не повод идти проверять на практике — особенно с протрузией.</div>
+        <div className="f-body text-xs mt-2" style={{ color: C.dim }}>Формулы точны до ~10 повторений. Это оценка, а не повод идти проверять на практике — тем более если на вкладке отмечены ограничения.</div>
       </div>
 
       {/* энергия */}
@@ -1589,24 +1614,49 @@ function BodyTab({ metrics, profile, setProfile, onAdd, onDelete, workouts }) {
         {tdee ? (
           <div className="flex gap-2"><Chip label="базовый обмен" value={bmr} sub="ккал/сут" /><Chip label="поддержание" value={tdee} sub="ккал/сут" /></div>
         ) : <div className="f-body text-xs" style={{ color: C.dim }}>Заполни профиль и добавь замер веса.</div>}
-        {bodyW > 0 && (<>
-          <div className="f-body text-xs uppercase tracking-wide mt-4 mb-2" style={{ color: C.dim }}>Расход за тренировку</div>
-          <div className="flex gap-2">
-            <input type="number" placeholder="мин" aria-label="Длительность тренировки в минутах" value={dur} onChange={(e) => setDur(e.target.value)} className="f-num w-20 rounded-lg px-2 py-2 text-sm shrink-0" style={inp} />
-            <select value={intensity} onChange={(e) => setIntensity(e.target.value)} aria-label="Плотность тренировки" className="f-body flex-1 rounded-lg px-2 py-2 text-sm min-w-0" style={inp}>
-              <option value="light">Спокойно, длинный отдых</option>
-              <option value="moderate">Обычно, отдых 90 сек</option>
-              <option value="hard">Плотно, суперсеты</option>
-            </select>
-          </div>
-          {avgDur && <button onClick={() => setDur(String(avgDur))} className="f-body text-xs mt-1.5" style={{ color: C.blueText }}>Подставить среднюю из журнала: {avgDur} мин</button>}
-          {gross && (
+        <div className="f-body text-xs uppercase tracking-wide mt-4 mb-2" style={{ color: C.dim }}>Расход за тренировку</div>
+        {!recent.length ? (
+          <div className="f-body text-xs" style={{ color: C.dim }}>Пока нечего считать: расход берётся из записи в журнале.</div>
+        ) : (<>
+          <select value={picked?.id || ""} onChange={(e) => setEnergyId(e.target.value)} aria-label="Тренировка для расчёта расхода"
+            className="f-body w-full rounded-lg px-3 py-2.5 text-sm" style={inp}>
+            {recent.map((w) => (
+              <option key={w.id} value={w.id}>{fmtDate(w.date)} · {w.dayLabel}</option>
+            ))}
+          </select>
+
+          {!energy ? (
+            <div className="f-body text-xs mt-2" style={{ color: C.dim }}>Нужен хотя бы один замер веса — без веса тела расход не посчитать.</div>
+          ) : (<>
             <div className="flex gap-2 mt-3">
-              <Chip label="всего сожжено" value={`~${gross}`} sub="ккал за сессию" accent={C.mustard} />
-              {net && <Chip label="сверх покоя" value={`~${net}`} sub="чистый расход" accent={C.moss} />}
+              <Chip label="всего сожжено" value={`~${energy.gross}`} sub="ккал" accent={C.mustard} />
+              {energy.rest > 0 && <Chip label="сверх покоя" value={`~${energy.net}`} sub="ккал" accent={C.moss} />}
             </div>
-          )}
-          <div className="f-body text-xs mt-2" style={{ color: C.dim }}>«Сверх покоя» — то, что потрачено дополнительно к тому, что тело сожгло бы лёжа. Именно эта цифра честная. Главный ориентир на дефиците — динамика веса и талии, а не калькулятор.</div>
+
+            {/* Откуда взялись эти числа. Без этого цифра выглядит взятой
+                с потолка, а она собрана из того, что записано в журнале. */}
+            <div className="mt-3">
+              <div className="f-body text-xs uppercase tracking-wide mb-1" style={{ color: C.dim }}>Как посчитано</div>
+              <CalcLine k="Длительность" v={`${energy.minutes} мин`} hint={DUR_SOURCE[energy.source]} />
+              <CalcLine k="Под нагрузкой" v={`${energy.workMin} мин`}
+                hint={`${Math.round(energy.density * 100)}% времени — ${energy.level.label}, ${met} МЕТ`} />
+              <CalcLine k="Вес тела" v={`${energy.bodyKg} кг`} hint={`замер ${fmtDate(energy.weightDate)}`} />
+              <CalcLine k="Всего" v={`${energy.gross} ккал`}
+                hint={`${met} × 3,5 × ${energy.bodyKg} ÷ 200 × ${energy.minutes}`} />
+              {energy.rest > 0 && (
+                <CalcLine k="Минус покой" v={`−${energy.rest} ккал`} hint="столько сгорело бы просто лёжа за это же время" />
+              )}
+            </div>
+
+            <div className="f-body text-xs mt-3" style={{ color: C.dim }}>
+              МЕТ — во сколько раз движение затратнее лежания; плотность берётся
+              из самой записи, поэтому час с долгими паузами и час без передышки
+              считаются по-разному. «Сверх покоя» — честная прибавка к суточному
+              расходу: обмен веществ идёт и без тренировки, и дважды его считать
+              нельзя. Разброс между людьми одного веса доходит до трети,
+              так что главный ориентир на дефиците — динамика веса и талии.
+            </div>
+          </>)}
         </>)}
       </div>
 
@@ -1834,7 +1884,7 @@ export default function App() {
         {shownTab === "journal" && <JournalTab workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} onUpdate={updateWorkout} onAdd={addWorkout} days={days} conditions={conditions} />}
         {shownTab === "progress" && <ProgressTab workouts={workouts} />}
         {shownTab === "base" && <BaseTab days={days} setDays={setDays} initialView={baseView} conditions={conditions} />}
-        {shownTab === "body" && <BodyTab metrics={metrics} profile={profile} setProfile={setProfile} onAdd={addMetric} onDelete={deleteMetric} workouts={workouts} />}
+        {shownTab === "body" && <BodyTab metrics={metrics} profile={profile} setProfile={setProfile} onAdd={addMetric} onDelete={deleteMetric} workouts={workouts} restOverrides={restOverrides} />}
         </div>
       </div>
 

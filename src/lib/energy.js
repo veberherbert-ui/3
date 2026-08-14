@@ -1,0 +1,114 @@
+import { restFor } from "./rest.js";
+
+/* Расход калорий за конкретную тренировку.
+
+   Общий калькулятор «минуты × плотность» отвечал на вопрос, который никто
+   не задаёт: сколько сожжёт абстрактная часовая тренировка. Полезен другой —
+   сколько сожгла вот эта, во вторник. Всё нужное для ответа в записи уже
+   есть: подходы, повторения, упражнения, часто и время с таймера.
+
+   Считается по MET — во сколько раз движение затратнее лежания. Формула
+   стандартная: ккал/мин = MET × 3,5 × вес(кг) / 200. Число приблизительное
+   по своей природе: разброс между людьми одного веса доходит до трети.
+   Поэтому здесь показывается не только итог, но и весь ход расчёта —
+   видно, откуда взялась каждая цифра, и с чем спорить. */
+
+/** Темп: около трёх секунд на повторение, но подход не бывает мгновенным. */
+const WORK_MIN_SEC = 20;
+const WORK_MAX_SEC = 90;
+const SEC_PER_REP = 3;
+
+export function setWorkSec(reps) {
+  const r = +reps || 0;
+  return Math.min(WORK_MAX_SEC, Math.max(WORK_MIN_SEC, Math.round(r * SEC_PER_REP)));
+}
+
+/** Сколько всего секунд под нагрузкой — сумма по всем подходам. */
+export function workSecondsOf(workout) {
+  let s = 0;
+  for (const ex of workout.exercises || []) for (const set of ex.sets || []) s += setWorkSec(set.reps);
+  return s;
+}
+
+export function setsCountOf(workout) {
+  let n = 0;
+  for (const ex of workout.exercises || []) n += (ex.sets || []).length;
+  return n;
+}
+
+/**
+ * Оценка длительности, когда таймер не отработал: подходы плюс отдых
+ * между ними. После последнего подхода отдых не считается — он уже дома.
+ */
+export function estimateSeconds(workout, restOverrides) {
+  let total = 0;
+  const sets = [];
+  for (const ex of workout.exercises || [])
+    for (const set of ex.sets || []) sets.push({ name: ex.name, reps: set.reps });
+  sets.forEach((s, i) => {
+    total += setWorkSec(s.reps);
+    if (i < sets.length - 1) total += restFor(s.name, restOverrides);
+  });
+  return total;
+}
+
+/* Плотность — доля времени под нагрузкой. Она же и есть та самая
+   «интенсивность», которую раньше приходилось выбирать вручную: час с
+   пятиминутными разговорами между подходами и час без передышки — разные
+   тренировки, и запись это знает лучше, чем память.
+
+   Значения MET по Компендиуму физической активности: силовая работа
+   в спокойном темпе — 3,5, обычная — 5,0, плотная или с тяжёлой базой — 6,0. */
+export const LEVELS = [
+  { id: "light", label: "спокойно", met: 3.5, upTo: 0.18 },
+  { id: "moderate", label: "обычно", met: 5.0, upTo: 0.3 },
+  { id: "hard", label: "плотно", met: 6.0, upTo: Infinity },
+];
+
+export function levelFor(density) {
+  return LEVELS.find((l) => density < l.upTo) || LEVELS[LEVELS.length - 1];
+}
+
+/** Вес тела на дату тренировки: ближайший замер, а не последний. */
+export function weightNear(metrics, date) {
+  const withWeight = (metrics || []).filter((m) => +m.weight > 0);
+  if (!withWeight.length) return null;
+  let best = withWeight[0];
+  for (const m of withWeight)
+    if (Math.abs(Date.parse(m.date) - Date.parse(date)) < Math.abs(Date.parse(best.date) - Date.parse(date))) best = m;
+  return { kg: +best.weight, date: best.date };
+}
+
+/**
+ * Полный расчёт по одной тренировке.
+ * @returns {null|{minutes:number, source:"timer"|"estimate"|"fixed", workMin:number,
+ *   density:number, level:object, gross:number, rest:number, net:number,
+ *   bodyKg:number, weightDate:string}}
+ */
+export function workoutEnergy(workout, { metrics, bmr, restOverrides } = {}) {
+  if (!workout) return null;
+  const w = weightNear(metrics, workout.date);
+  if (!w) return null;
+
+  const workSec = workSecondsOf(workout);
+  const recorded = workout.durationMin ? workout.durationMin * 60 : 0;
+  /* Записанное время короче времени под нагрузкой — физически невозможно:
+     таймер не отработал, тренировку записали задним числом или сессию
+     перезапустили. Такой цифре верить нельзя, считаем по подходам. */
+  const source = !recorded ? "estimate" : recorded < workSec ? "fixed" : "timer";
+  const seconds = source === "timer" ? recorded : estimateSeconds(workout, restOverrides);
+  const minutes = Math.max(1, Math.round(seconds / 60));
+
+  const density = Math.min(1, workSec / (minutes * 60));
+  const level = levelFor(density);
+
+  const gross = Math.round((level.met * 3.5 * w.kg / 200) * minutes);
+  /* Вычитаем то, что тело сожгло бы за это же время лёжа: иначе расход
+     тренировки складывается с суточной нормой дважды. */
+  const rest = bmr ? Math.round((bmr / 1440) * minutes) : 0;
+
+  return {
+    minutes, source, workMin: Math.round(workSec / 60), density, level,
+    gross, rest, net: Math.max(0, gross - rest), bodyKg: w.kg, weightDate: w.date,
+  };
+}

@@ -199,6 +199,41 @@ ok(!!added, "тренировка записана прошедшей датой
 ok(added?.exercises?.length === 1, "пустые упражнения отброшены");
 ok(list?.length === 2, "прежняя запись на месте");
 
+section("Расход за тренировку");
+await tab("Тело");
+await page.getByRole("button", { name: /Новый замер/ }).click();
+await page.waitForTimeout(600);
+await page.getByRole("spinbutton", { name: "Вес, кг" }).fill("82");
+await page.getByRole("button", { name: /Сохранить замер/ }).click();
+await page.waitForTimeout(900);
+await page.getByRole("spinbutton", { name: "Рост в сантиметрах" }).fill("180");
+await page.getByRole("spinbutton", { name: "Возраст, лет" }).fill("35");
+await page.waitForTimeout(700);
+const picker = page.getByRole("combobox", { name: "Тренировка для расчёта расхода" });
+await picker.scrollIntoViewIfNeeded();
+ok(await picker.isVisible(), "расход считается по выбранной тренировке из журнала");
+ok((await picker.locator("option").count()) === 2, "в списке обе записи журнала");
+const energyCard = picker.locator('xpath=ancestor::div[contains(@class,"rounded-xl")][1]');
+const calc = await energyCard.innerText();
+/* Число само по себе ничего не значит — важно, что видно, из чего оно
+   собрано: длительность, доля времени под нагрузкой, вес тела. */
+for (const part of ["Длительность", "Под нагрузкой", "Вес тела", "МЕТ"])
+  ok(calc.includes(part), `в разборе расчёта есть «${part.toLowerCase()}»`);
+/* Проверяем не саму цифру — она зависит от того, сколько подходов ввёл
+   тест, — а темп: ккал в минуту при 82 кг должно лежать между 3,5 и 6,0 МЕТ,
+   то есть примерно 5–9. Мимо этого коридора — сломана формула. */
+const kcal = +(calc.match(/~(\d+)\s*\n\s*ВСЕГО СОЖЖЕНО/i)?.[1] || 0);
+const mins = +(calc.match(/Длительность\s*\n\s*(\d+)\s*мин/i)?.[1] || 0);
+const perMin = mins ? kcal / mins : 0;
+ok(perMin > 4 && perMin < 10, "темп расхода правдоподобен", `${kcal} ккал за ${mins} мин`);
+const netK = +(calc.match(/~(\d+)\s*\n\s*СВЕРХ ПОКОЯ/i)?.[1] || 0);
+ok(netK > 0 && netK < kcal, "«сверх покоя» меньше общего расхода", `${netK} < ${kcal}`);
+/* Смена тренировки в списке должна менять расчёт, а не только подпись. */
+const first = calc;
+await picker.selectOption({ index: 1 });
+await page.waitForTimeout(500);
+ok((await energyCard.innerText()) !== first, "выбор другой тренировки пересчитывает расход");
+
 section("Травмы и замены");
 await tab("Тело");
 await page.getByText("Травмы и ограничения").click();
