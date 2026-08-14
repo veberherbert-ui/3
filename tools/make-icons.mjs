@@ -1,9 +1,17 @@
 /* Генерирует иконки приложения из одного SVG.
-   Запуск: node tools/make-icons.mjs
-   Пересобирать нужно только при смене логотипа. */
+   Запуск: npm i -D sharp && npm run icons
+   Пересобирать нужно только при смене логотипа, поэтому sharp не входит
+   в зависимости: иначе он тянулся бы при каждой сборке на сервере. */
 
 import { writeFileSync, mkdirSync } from "node:fs";
-import sharp from "sharp";
+
+let sharp;
+try {
+  ({ default: sharp } = await import("sharp"));
+} catch {
+  console.error("Нужен sharp: npm i -D sharp");
+  process.exit(2);
+}
 
 const OUT = "public";
 const BG = "#15171B";

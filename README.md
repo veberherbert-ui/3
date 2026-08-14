@@ -99,9 +99,14 @@ npm run smoke
 
 | Поле | Значение |
 |---|---|
+| Production branch | `main` |
 | Framework preset | Vite (или None) |
 | Build command | `npm run build` |
 | Build output directory | `dist` |
+
+**Production branch важнее всего.** Cloudflare по умолчанию собирает ветку,
+назначенную основной в самом GitHub. Если там осталась другая ветка, сборка
+упадёт на `npm error Missing script: "build"` — она собирает не тот код.
 
 GitHub Pages отдаёт репозиторий из подпапки с его именем, поэтому там сборка
 идёт с `BASE_PATH=/3/` — это уже прописано в `.github/workflows/deploy.yml`
