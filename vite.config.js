@@ -2,11 +2,12 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
-/* base — подпапка, из которой отдаётся приложение.
-   GitHub Pages для репозитория veberherbert-ui/3 отдаёт его по адресу
-   https://veberherbert-ui.github.io/3/ , поэтому по умолчанию "/3/".
-   Для своего домена или локальной сборки: BASE_PATH=/ npm run build */
-const base = process.env.BASE_PATH ?? "/3/";
+/* base — путь, по которому отдаётся приложение.
+   По умолчанию корень: так работают Cloudflare Pages, Netlify, Vercel
+   и локальный просмотр.
+   GitHub Pages отдаёт репозиторий из подпапки с его именем, поэтому там
+   сборка запускается с BASE_PATH=/3/ — это прописано в .github/workflows. */
+const base = process.env.BASE_PATH || "/";
 
 export default defineConfig({
   base,

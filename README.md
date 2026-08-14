@@ -59,13 +59,20 @@ npm run build    # сборка в dist/
 npm run preview  # посмотреть собранное
 ```
 
-Публикация происходит сама: пуш в `main` запускает сборку и выкладывает её на GitHub Pages.
+### Публикация
 
-Для сборки под свой домен или локальную проверку путь задаётся переменной:
+Приложение отдаётся из корня — так работают Cloudflare Pages, Netlify, Vercel
+и локальный просмотр. Настройки для Cloudflare Pages:
 
-```bash
-BASE_PATH=/ npm run build
-```
+| Поле | Значение |
+|---|---|
+| Framework preset | Vite (или None) |
+| Build command | `npm run build` |
+| Build output directory | `dist` |
+
+GitHub Pages отдаёт репозиторий из подпапки с его именем, поэтому там сборка
+идёт с `BASE_PATH=/3/` — это уже прописано в `.github/workflows/deploy.yml`
+и запускается само при пуше в `main`.
 
 ### Структура
 
