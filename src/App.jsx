@@ -1,5 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import React, { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from "react";
 import { Plus, X, TrendingUp, BookOpen, Dumbbell, Flame, Settings, Trash2, Check, Info, Play, Timer, Calculator, Copy, ExternalLink, Activity, Pause, ChevronDown, ChevronUp, MoreHorizontal, Search, Library, Layers, Pencil, RotateCcw, Download, Upload, Share2, HardDrive, ShieldAlert, TriangleAlert, HeartPulse, Repeat2, Volume2, VolumeX } from "lucide-react";
 
 import { EXDB, GROUPS, ALL_MUSCLES, PUSH_M, PULL_M, PRESETS, DEFAULT_DAYS, isUni, isBW } from "./data/exercises.js";
@@ -16,8 +15,18 @@ import {
 import { loadKey, saveKey, deleteKey, requestPersistence, storageEstimate } from "./lib/storage.js";
 import { shareOrDownload, readFileAsText, backupName } from "./lib/backup.js";
 import { restFor, fmtRest, stepRest } from "./lib/rest.js";
-import { primeAudio, playRestOver, playTick } from "./lib/sound.js";
+import { primeAudio, playRestOver, scheduleRestOver, cancelScheduled, vibrate, releaseAudio, audioReady } from "./lib/sound.js";
 import { useWakeLock } from "./lib/wakelock.js";
+
+/* Графики грузятся отдельным куском: библиотека тяжёлая, а нужна только
+   на двух вкладках из пяти. */
+const LineByDate = lazy(() => import("./Charts.jsx").then((m) => ({ default: m.LineByDate })));
+const BarByDate = lazy(() => import("./Charts.jsx").then((m) => ({ default: m.BarByDate })));
+
+/** Место под график, пока он подгружается — чтобы страница не дёргалась. */
+const ChartFrame = ({ children, height = 200 }) => (
+  <Suspense fallback={<div style={{ height }} />}>{children}</Suspense>
+);
 
 /* ============ atoms ============ */
 const Chip = ({ label, value, sub, accent }) => (
@@ -35,6 +44,35 @@ const Sheet = ({ children, onClose }) => (
 const UniTag = () => (
   <span className="f-body text-[9px] rounded px-1 py-0.5 ml-1 align-middle" style={{ background: C.blue, color: C.chalk }}>×2</span>
 );
+
+/**
+ * Кнопка необратимого действия: первое касание взводит её, второе выполняет.
+ * Отдельным окном не делаем — их и так много, а вложенные листы уже
+ * однажды перекрыли друг друга. Взвод сам снимается через несколько секунд.
+ */
+function ConfirmButton({ onConfirm, question = "Точно?", className, style, children }) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 5000);
+    return () => clearTimeout(t);
+  }, [armed]);
+
+  if (!armed) {
+    return (
+      <button onClick={() => setArmed(true)} className={className} style={style}>
+        {children}
+      </button>
+    );
+  }
+  return (
+    <div className="flex gap-1.5 items-center">
+      <span className="f-body text-xs flex-1 text-center" style={{ color: C.red }}>{question}</span>
+      <button onClick={() => { setArmed(false); onConfirm(); }} className="f-body rounded-lg px-3 py-2 text-xs font-medium" style={{ background: C.red, color: C.chalk }}>Да</button>
+      <button onClick={() => setArmed(false)} className="f-body rounded-lg px-3 py-2 text-xs" style={{ background: C.surfaceHi, color: C.dim, border: `1px solid ${C.line}` }}>Нет</button>
+    </div>
+  );
+}
 
 /* Маленький значок рядом с названием: красный — не рекомендуется при твоих
    состояниях, жёлтый — с осторожностью. Без выбранных состояний не рисуется. */
@@ -107,6 +145,48 @@ function RiskPanel({ name, conditions, onOpen }) {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Список упражнений с поиском — одинаково нужен и в редакторе дней,
+ * и при добавлении упражнения в идущую тренировку.
+ */
+function ExercisePicker({ title, onPick, onClose, has, conditions = [] }) {
+  const [q, setQ] = useState("");
+  const query = q.trim().toLowerCase();
+  const list = useMemo(() => {
+    const all = Object.keys(EXDB);
+    if (query.length < 2) return all;
+    return all.filter((n) => n.toLowerCase().includes(query) || EXDB[n].m.toLowerCase().includes(query));
+  }, [query]);
+
+  return (
+    <Sheet onClose={onClose}>
+      <div className="f-display text-base font-semibold mb-2" style={{ color: C.chalk }}>{title}</div>
+      <div className="relative mb-3">
+        <Search size={15} color={C.dim} className="absolute left-3 top-1/2 -translate-y-1/2" />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Поиск по названию или мышце…"
+          className="f-body w-full rounded-lg pl-9 pr-3 py-2.5 text-sm" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }} />
+      </div>
+      <div className="space-y-1">
+        {!list.length && <div className="f-body text-sm text-center py-8" style={{ color: C.dim }}>Ничего не нашлось.</div>}
+        {list.map((n) => {
+          const already = has?.(n);
+          return (
+            <button key={n} onClick={() => onPick(n)} disabled={already} className="w-full flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-left"
+              style={{ background: C.surfaceHi, opacity: already ? 0.45 : 1 }}>
+              <span className="min-w-0">
+                <span className="f-body text-xs block truncate" style={{ color: C.chalk }}>{n}{isUni(n) && <UniTag />}<RiskMark name={n} conditions={conditions} /></span>
+                <span className="f-body text-[9px]" style={{ color: C.dim }}>{EXDB[n].m} · {EXDB[n].eq}</span>
+              </span>
+              {already ? <Check size={14} color={C.moss} /> : <Plus size={14} color={C.moss} />}
+            </button>
+          );
+        })}
+      </div>
+      <button onClick={onClose} className="f-body w-full mt-3 py-3 text-sm" style={{ color: C.dim }}>Готово</button>
+    </Sheet>
   );
 }
 
@@ -206,19 +286,26 @@ function RestBar({ rest, onDone, onAdjust, onSkip, muted }) {
   const left = Math.max(0, Math.ceil(leftMs / 1000));
   const done = leftMs <= 0;
 
-  /* сигналим один раз: пока полоса на экране, эти флаги живут в ней самой */
-  const signalled = useRef(false);
-  const ticked = useRef(false);
+  /* Звук планируется заранее, а не играется по тику: часы Web Audio идут,
+     даже когда приложение свёрнуто и таймеры JavaScript заморожены.
+     Эффект перезапускается при правке времени и при возврате в приложение
+     после перезагрузки — поэтому сигнал не теряется. */
   useEffect(() => {
-    if (done && !signalled.current) {
-      signalled.current = true;
-      if (!muted) playRestOver();
+    if (muted) return;
+    const delay = (until - Date.now()) / 1000;
+    if (delay <= 0) return;
+    scheduleRestOver(delay);
+    return cancelScheduled;
+  }, [until, muted]);
+
+  /* вибрация планированию не поддаётся — её даём по факту */
+  const buzzed = useRef(false);
+  useEffect(() => {
+    if (done && !buzzed.current) {
+      buzzed.current = true;
+      if (!muted) vibrate();
     }
-    if (!done && left <= 3 && !ticked.current) {
-      ticked.current = true;
-      if (!muted) playTick();
-    }
-  }, [done, left, muted]);
+  }, [done, muted]);
 
   const pct = total > 0 ? Math.max(0, Math.min(100, (leftMs / (total * 1000)) * 100)) : 0;
   const accent = done ? C.moss : left <= 10 ? C.mustard : C.red;
@@ -258,6 +345,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
   const [custom, setCustom] = useState("");
   const [info, setInfo] = useState(null);
   const [menu, setMenu] = useState(false);
+  const [adding, setAdding] = useState(false);
 
   const day = days.find((d) => d.id === pickDay) || days[0];
   useEffect(() => { if (day) setPicked(day.exercises); }, [pickDay, days.length]); // eslint-disable-line
@@ -288,19 +376,37 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
 
   const setsLine = (ex) => ex.sets.map((s) => (ex.bodyweight ? s.reps : `${s.reps}×${s.weight}`)).join(" · ");
 
+  /** Заготовка упражнения: число подходов и веса берутся из прошлого раза. */
+  const blankExercise = useCallback((n) => {
+    const prev = lastFor(n);
+    const bw = isBW(n);
+    const nSets = prev ? prev.ex.sets.length : 3;
+    return {
+      name: n, bodyweight: bw, uni: isUni(n),
+      sets: Array.from({ length: nSets }, (_, i) => ({
+        reps: "",
+        weight: bw ? null : prev?.ex.sets[i]?.weight ?? prev?.ex.sets[0]?.weight ?? "",
+        done: false,
+      })),
+    };
+  }, [lastFor]);
+
+  /** Последняя тренировка этого дня — для кнопки «повторить». */
+  const lastWorkoutOfDay = useMemo(() => {
+    if (!day) return null;
+    return [...workouts].sort((a, b) => b.date.localeCompare(a.date)).find((w) => w.dayId === day.id) || null;
+  }, [workouts, day]);
+
   if (!session) {
     if (!days.length) return <div className="px-4 py-16 text-center f-body text-sm" style={{ color: C.dim }}>Нет ни одного дня. Создай его во вкладке «База».</div>;
     const toggle = (n) => setPicked((p) => (p.includes(n) ? p.filter((x) => x !== n) : [...p, n]));
-    const start = () => {
-      if (!picked.length) return;
+    const start = (names = picked) => {
+      if (!names.length) return;
+      primeAudio(); /* касание пользователя — момент, когда iOS разрешает звук */
       setSession({
         id: uid(), date: today(), dayId: day.id, dayLabel: day.name,
         startedAt: Date.now(), resumedAt: Date.now(), accumMs: 0, paused: false, note: "",
-        exercises: picked.map((n) => {
-          const prev = lastFor(n); const bw = isBW(n);
-          const nSets = prev ? prev.ex.sets.length : 3;
-          return { name: n, bodyweight: bw, uni: isUni(n), sets: Array.from({ length: nSets }, (_, i) => ({ reps: "", weight: bw ? null : prev?.ex.sets[i]?.weight ?? prev?.ex.sets[0]?.weight ?? "", done: false })) };
-        }),
+        exercises: names.map(blankExercise),
       });
     };
     return (
@@ -338,9 +444,19 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
           <input value={custom} onChange={(e) => setCustom(e.target.value)} placeholder="Разовое упражнение…" className="f-body flex-1 rounded-lg px-3 py-2 text-sm min-w-0" style={{ background: C.surface, color: C.chalk, border: `1px solid ${C.line}` }} />
           <button onClick={() => { if (custom.trim()) { setPicked((p) => [...p, custom.trim()]); setCustom(""); } }} className="rounded-lg px-3" style={{ background: C.surface, border: `1px solid ${C.line}`, color: C.chalk }}><Plus size={16} /></button>
         </div>
-        <button onClick={start} disabled={!picked.length} className="f-display w-full mt-5 rounded-xl py-3.5 text-base font-semibold flex items-center justify-center gap-2" style={{ background: picked.length ? C.red : C.surface, color: picked.length ? C.chalk : C.dim }}>
+        <button onClick={() => start()} disabled={!picked.length} className="f-display w-full mt-5 rounded-xl py-3.5 text-base font-semibold flex items-center justify-center gap-2" style={{ background: picked.length ? C.red : C.surface, color: picked.length ? C.chalk : C.dim }}>
           <Play size={18} /> Начать тренировку ({picked.length})
         </button>
+
+        {lastWorkoutOfDay && (
+          <button
+            onClick={() => start(lastWorkoutOfDay.exercises.map((e) => e.name))}
+            className="f-body w-full mt-2 rounded-xl py-3 text-sm flex items-center justify-center gap-2"
+            style={{ background: C.surface, color: C.chalk, border: `1px solid ${C.line}` }}>
+            <RotateCcw size={15} color={C.dim} />
+            Повторить прошлую ({fmtDate(lastWorkoutOfDay.date)}, {lastWorkoutOfDay.exercises.length} упр.)
+          </button>
+        )}
         {info && <ExerciseInfo name={info} onClose={() => setInfo(null)} conditions={conditions} />}
       </div>
     );
@@ -368,6 +484,9 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
     e.sets = [...e.sets, { reps: "", weight: last.weight, done: false }]; ex[i] = e; return { ...s, exercises: ex };
   });
   const rmExercise = (i) => setSession((s) => ({ ...s, exercises: s.exercises.filter((_, k) => k !== i) }));
+  /* решил доделать что-то сверх плана — добавляем прямо на ходу */
+  const addExercise = (n) => setSession((s) =>
+    s.exercises.some((e) => e.name === n) ? s : { ...s, exercises: [...s.exercises, blankExercise(n)] });
   const togglePause = () => setSession((s) => s.paused
     ? { ...s, paused: false, resumedAt: Date.now() }
     : { ...s, paused: true, accumMs: (s.accumMs || 0) + (Date.now() - (s.resumedAt || s.startedAt)) });
@@ -458,9 +577,23 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
         })}
       </div>
 
+      <button onClick={() => setAdding(true)} className="f-body w-full mt-3 rounded-xl py-3 text-sm flex items-center justify-center gap-2" style={{ background: C.surface, color: C.moss, border: `1px solid ${C.line}` }}>
+        <Plus size={15} /> Добавить упражнение
+      </button>
+
       <textarea value={session.note} onChange={(e) => setSession((s) => ({ ...s, note: e.target.value }))} placeholder="Заметка: самочувствие, плечо, сон, что тянуло…" rows={2}
         className="f-body w-full mt-3 rounded-xl px-3 py-2.5 text-sm resize-none" style={{ background: C.surface, color: C.chalk, border: `1px solid ${C.line}` }} />
       <button onClick={finish} className="f-display w-full mt-3 rounded-xl py-3.5 text-base font-semibold flex items-center justify-center gap-2" style={{ background: C.red, color: C.chalk }}><Check size={18} /> Завершить и сохранить</button>
+
+      {adding && (
+        <ExercisePicker
+          title="Добавить в тренировку"
+          conditions={conditions}
+          has={(n) => session.exercises.some((e) => e.name === n)}
+          onPick={addExercise}
+          onClose={() => setAdding(false)}
+        />
+      )}
 
       {menu && (
         <Sheet onClose={() => setMenu(false)}>
@@ -470,7 +603,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
             {session.paused ? <><Play size={15} /> Продолжить</> : <><Pause size={15} /> Пауза</>}
           </button>
           <div className="f-body text-[11px] mb-1 mt-3" style={{ color: C.dim }}>Прервать — тренировка не сохранится в журнал.</div>
-          <button onClick={() => { setSession(null); setMenu(false); }} className="f-body w-full rounded-xl py-3 text-sm flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.red, border: `1px solid ${C.line}` }}><Trash2 size={15} /> Прервать без сохранения</button>
+          <ConfirmButton onConfirm={() => { setSession(null); setMenu(false); }} question="Тренировка не сохранится" className="f-body w-full rounded-xl py-3 text-sm flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.red, border: `1px solid ${C.line}` }}><Trash2 size={15} /> Прервать без сохранения</ConfirmButton>
           <button onClick={() => setMenu(false)} className="f-body w-full mt-2 py-3 text-sm" style={{ color: C.dim }}>Отмена</button>
         </Sheet>
       )}
@@ -561,7 +694,6 @@ function DaysEditor({ days, setDays, conditions }) {
   const [open, setOpen] = useState(null);
   const [pickFor, setPickFor] = useState(null);
   const [presets, setPresets] = useState(false);
-  const [q, setQ] = useState("");
 
   const rename = (id, name) => setDays(days.map((d) => (d.id === id ? { ...d, name } : d)));
   const removeEx = (id, n) => setDays(days.map((d) => (d.id === id ? { ...d, exercises: d.exercises.filter((x) => x !== n) } : d)));
@@ -581,7 +713,6 @@ function DaysEditor({ days, setDays, conditions }) {
     setPresets(false);
   };
 
-  const filtered = q.trim().length > 1 ? Object.keys(EXDB).filter((n) => n.toLowerCase().includes(q.trim().toLowerCase()) || EXDB[n].m.toLowerCase().includes(q.trim().toLowerCase())) : null;
 
   return (
     <div>
@@ -626,8 +757,8 @@ function DaysEditor({ days, setDays, conditions }) {
                     ))}
                     {!d.exercises.length && <div className="f-body text-xs text-center py-3" style={{ color: C.dim }}>Пока пусто — добавь упражнения.</div>}
                   </div>
-                  <button onClick={() => { setPickFor(d.id); setQ(""); }} className="f-body w-full mt-2 rounded-lg py-2.5 text-sm flex items-center justify-center gap-1.5" style={{ background: C.surfaceHi, color: C.moss, border: `1px solid ${C.line}` }}><Plus size={14} /> Добавить упражнение</button>
-                  <button onClick={() => delDay(d.id)} className="f-body w-full mt-1.5 py-2 text-xs flex items-center justify-center gap-1.5" style={{ color: C.red }}><Trash2 size={12} /> Удалить день</button>
+                  <button onClick={() => setPickFor(d.id)} className="f-body w-full mt-2 rounded-lg py-2.5 text-sm flex items-center justify-center gap-1.5" style={{ background: C.surfaceHi, color: C.moss, border: `1px solid ${C.line}` }}><Plus size={14} /> Добавить упражнение</button>
+                  <div className="mt-1.5"><ConfirmButton onConfirm={() => delDay(d.id)} question="Удалить день целиком?" className="f-body w-full py-2 text-xs flex items-center justify-center gap-1.5" style={{ color: C.red }}><Trash2 size={12} /> Удалить день</ConfirmButton></div>
                 </div>
               )}
             </div>
@@ -636,28 +767,13 @@ function DaysEditor({ days, setDays, conditions }) {
       </div>
 
       {pickFor && (
-        <Sheet onClose={() => setPickFor(null)}>
-          <div className="f-display text-base font-semibold mb-2" style={{ color: C.chalk }}>Добавить в «{days.find((d) => d.id === pickFor)?.name}»</div>
-          <div className="relative mb-3">
-            <Search size={15} color={C.dim} className="absolute left-3 top-1/2 -translate-y-1/2" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Поиск по названию или мышце…" className="f-body w-full rounded-lg pl-9 pr-3 py-2.5 text-sm" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }} />
-          </div>
-          <div className="space-y-1">
-            {(filtered || Object.keys(EXDB)).map((n) => {
-              const has = days.find((d) => d.id === pickFor)?.exercises.includes(n);
-              return (
-                <button key={n} onClick={() => addEx(pickFor, n)} disabled={has} className="w-full flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-left" style={{ background: C.surfaceHi, opacity: has ? 0.45 : 1 }}>
-                  <span className="min-w-0">
-                    <span className="f-body text-xs block truncate" style={{ color: C.chalk }}>{n}{isUni(n) && <UniTag />}<RiskMark name={n} conditions={conditions} /></span>
-                    <span className="f-body text-[9px]" style={{ color: C.dim }}>{EXDB[n].m} · {EXDB[n].eq}</span>
-                  </span>
-                  {has ? <Check size={14} color={C.moss} /> : <Plus size={14} color={C.moss} />}
-                </button>
-              );
-            })}
-          </div>
-          <button onClick={() => setPickFor(null)} className="f-body w-full mt-3 py-3 text-sm" style={{ color: C.dim }}>Готово</button>
-        </Sheet>
+        <ExercisePicker
+          title={`Добавить в «${days.find((d) => d.id === pickFor)?.name}»`}
+          conditions={conditions}
+          has={(n) => !!days.find((d) => d.id === pickFor)?.exercises.includes(n)}
+          onPick={(n) => addEx(pickFor, n)}
+          onClose={() => setPickFor(null)}
+        />
       )}
 
       {presets && (
@@ -837,9 +953,9 @@ function WorkoutCard({ w, isPR, onDelete, onEdit }) {
             <button onClick={() => onEdit(w)} className="f-body flex-1 rounded-lg py-2 text-xs flex items-center justify-center gap-1.5" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
               <Pencil size={12} /> Изменить
             </button>
-            <button onClick={() => onDelete(w.id)} className="f-body rounded-lg px-3 py-2 text-xs flex items-center justify-center gap-1.5" style={{ background: C.surfaceHi, color: C.red, border: `1px solid ${C.line}` }}>
+            <ConfirmButton onConfirm={() => onDelete(w.id)} question="Удалить тренировку?" className="f-body rounded-lg px-3 py-2 text-xs flex items-center justify-center gap-1.5" style={{ background: C.surfaceHi, color: C.red, border: `1px solid ${C.line}` }}>
               <Trash2 size={12} /> Удалить
-            </button>
+            </ConfirmButton>
           </div>
         </div>
       )}
@@ -886,7 +1002,7 @@ function JournalTab({ workouts, onDelete, onExport, onUpdate }) {
         </div>
       )}
       <button onClick={onExport} className="f-body w-full mt-2 rounded-xl py-2.5 text-sm flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
-        <Copy size={15} /> Выгрузить дневник для Claude
+        <Share2 size={15} /> Выгрузить дневник текстом
       </button>
       <div className="mt-4 space-y-2.5">
         {!sorted.length && <div className="f-body text-sm text-center py-12" style={{ color: C.dim }}>Пусто. Собери первую тренировку во вкладке «Сессия».</div>}
@@ -988,28 +1104,16 @@ function ProgressTab({ workouts }) {
             <Chip label={m.label} value={`${last[metric]}${m.unit ? " " + m.unit : ""}`} sub={delta ? `${delta > 0 ? "+" : ""}${r1(delta)} за период` : undefined} />
             <Chip label="сессий" value={valid.length} />
           </div>
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={series} margin={{ top: 16, right: 8, left: -18, bottom: 0 }}>
-              <CartesianGrid stroke={C.line} strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="date" stroke={C.dim} fontSize={10} tickLine={false} axisLine={{ stroke: C.line }} />
-              <YAxis stroke={C.dim} fontSize={10} tickLine={false} axisLine={false} domain={["auto", "auto"]} />
-              <Tooltip contentStyle={{ background: C.surfaceHi, border: `1px solid ${C.line}`, borderRadius: 8, fontSize: 12 }} labelStyle={{ color: C.chalk }} />
-              <Line type="monotone" dataKey={metric} name={m.label} stroke={C.red} strokeWidth={2.5} dot={{ r: 3, fill: C.red }} connectNulls />
-            </LineChart>
-          </ResponsiveContainer>
+          <ChartFrame>
+            <LineByDate data={series} dataKey={metric} name={m.label} />
+          </ChartFrame>
         </>) : <div className="f-body text-sm text-center py-12" style={{ color: C.dim }}>Нет данных за период.</div>}
       </>)}
 
       {view === "total" && (
-        <ResponsiveContainer width="100%" height={230}>
-          <BarChart data={totalSeries} margin={{ top: 16, right: 8, left: -18, bottom: 0 }}>
-            <CartesianGrid stroke={C.line} strokeDasharray="3 3" vertical={false} />
-            <XAxis dataKey="date" stroke={C.dim} fontSize={10} tickLine={false} axisLine={{ stroke: C.line }} />
-            <YAxis stroke={C.dim} fontSize={10} tickLine={false} axisLine={false} />
-            <Tooltip contentStyle={{ background: C.surfaceHi, border: `1px solid ${C.line}`, borderRadius: 8, fontSize: 12 }} labelStyle={{ color: C.chalk }} />
-            <Bar dataKey="tonnage" name="тоннаж, кг" fill={C.blue} radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
+        <ChartFrame>
+          <BarByDate data={totalSeries} dataKey="tonnage" name="тоннаж, кг" />
+        </ChartFrame>
       )}
 
       {view === "volume" && (<div>
@@ -1240,15 +1344,10 @@ function BodyTab({ metrics, profile, setProfile, onAdd, onDelete, workouts }) {
             {availableKeys.map((mm) => <button key={mm.k} onClick={() => setChartKey(mm.k)} className="f-body shrink-0 rounded-full px-3 py-1 text-[11px]" style={{ background: chartKey === mm.k ? C.blue : C.surface, color: chartKey === mm.k ? C.chalk : C.dim, border: `1px solid ${chartKey === mm.k ? C.blue : C.line}` }}>{mm.l}</button>)}
           </div>
           {chartData.length > 1 ? (
-            <ResponsiveContainer width="100%" height={160}>
-              <LineChart data={chartData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
-                <CartesianGrid stroke={C.line} strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="date" stroke={C.dim} fontSize={10} tickLine={false} axisLine={{ stroke: C.line }} />
-                <YAxis stroke={C.dim} fontSize={10} tickLine={false} axisLine={false} domain={["dataMin - 2", "dataMax + 2"]} />
-                <Tooltip contentStyle={{ background: C.surfaceHi, border: `1px solid ${C.line}`, borderRadius: 8, fontSize: 12 }} labelStyle={{ color: C.chalk }} />
-                <Line type="monotone" dataKey="v" name={MEASURES.find((x) => x.k === chartKey)?.l} stroke={C.mustard} strokeWidth={2.5} dot={{ r: 3, fill: C.mustard }} />
-              </LineChart>
-            </ResponsiveContainer>
+            <ChartFrame height={160}>
+              <LineByDate data={chartData} dataKey="v" name={MEASURES.find((x) => x.k === chartKey)?.l}
+                color={C.mustard} height={160} domain={["dataMin - 2", "dataMax + 2"]} />
+            </ChartFrame>
           ) : <div className="f-body text-xs text-center py-6" style={{ color: C.dim }}>Нужно минимум два замера для графика.</div>}
         </div>
       )}
@@ -1438,6 +1537,9 @@ export default function App() {
   /** Состояния здоровья — из них берутся предупреждения по всему приложению. */
   const conditions = useMemo(() => profile.conditions || [], [profile.conditions]);
 
+  /* тренировка кончилась — отпускаем медиасессию, она держала звук наготове */
+  useEffect(() => { if (!session) releaseAudio(); }, [session]);
+
   /** Правки времени отдыха, сделанные прямо на тренировке */
   const restOverrides = useMemo(() => profile.restOverrides || {}, [profile.restOverrides]);
   const setRestOverride = useCallback((name, sec) => {
@@ -1538,8 +1640,8 @@ export default function App() {
 
       {exportText !== null && (
         <Sheet onClose={() => setExportText(null)}>
-          <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>Выгрузка для Claude</div>
-          <div className="f-body text-xs mb-3" style={{ color: C.dim }}>Скопируй и вставь в чат — так я увижу весь дневник и смогу его разобрать.</div>
+          <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>Выгрузка дневника</div>
+          <div className="f-body text-xs mb-3" style={{ color: C.dim }}>Весь дневник обычным текстом: тренировки, подходы, замеры. Годится, чтобы отправить тренеру или разобрать самому.</div>
           <textarea readOnly value={exportText} rows={10} onFocus={(e) => e.target.select()} className="f-num w-full rounded-lg p-2.5 text-[10px] leading-snug" style={{ background: C.bg, color: C.chalk, border: `1px solid ${C.line}` }} />
           <button onClick={async () => { try { await navigator.clipboard.writeText(exportText); setCopied(true); } catch { setCopied(false); } }} className="f-body w-full mt-2 rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-2" style={{ background: copied ? C.moss : C.red, color: C.chalk }}>
             {copied ? <><Check size={15} /> Скопировано</> : <><Copy size={15} /> Скопировать</>}
@@ -1574,18 +1676,27 @@ export default function App() {
                 : "Хранилище не закреплено. Делай копию хотя бы раз в месяц."}
             </span>
           </div>
-          <button
-            onClick={() => { const next = !muted; setProfile((p) => ({ ...p, muted: next })); if (!next) { primeAudio(); playTick(); } }}
-            className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2"
-            style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
-            {muted ? <VolumeX size={15} color={C.dim} /> : <Volume2 size={15} color={C.moss} />}
-            Сигнал в конце отдыха: {muted ? "выключен" : "включён"}
-          </button>
+          <div className="flex gap-2 mb-2">
+            <button
+              onClick={() => { const next = !muted; setProfile((p) => ({ ...p, muted: next })); if (!next) primeAudio(); }}
+              className="f-body flex-1 rounded-xl py-3 text-sm flex items-center justify-center gap-2"
+              style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
+              {muted ? <VolumeX size={15} color={C.dim} /> : <Volume2 size={15} color={C.moss} />}
+              Сигнал: {muted ? "выкл" : "вкл"}
+            </button>
+            <button
+              onClick={() => { primeAudio(); playRestOver(); setTimeout(() => say(audioReady() ? "Не слышно? Проверь переключатель звука сбоку телефона" : "Система не пустила звук — попробуй ещё раз"), 700); }}
+              disabled={muted}
+              className="f-body flex-1 rounded-xl py-3 text-sm flex items-center justify-center gap-2"
+              style={{ background: C.surfaceHi, color: muted ? C.dim : C.chalk, border: `1px solid ${C.line}` }}>
+              <Volume2 size={15} /> Проверить
+            </button>
+          </div>
           <button onClick={saveBackupFile} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Share2 size={15} /> Сохранить копию файлом</button>
           <button onClick={async () => { try { await navigator.clipboard.writeText(backupJSON()); say("Копия в буфере обмена"); } catch { setShowSettings(false); setExportText(backupJSON()); } }} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Copy size={15} /> Скопировать копию текстом</button>
           <button onClick={openImport} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Upload size={15} /> Восстановить из копии</button>
-          <button onClick={() => { setDays(DEFAULT_DAYS); setShowSettings(false); say("Дни возвращены к исходным"); }} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><RotateCcw size={15} /> Сбросить дни к исходным</button>
-          <button onClick={wipe} className="f-body w-full rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.red, border: `1px solid ${C.line}` }}><Trash2 size={15} /> Удалить все записи</button>
+          <div className="mb-2"><ConfirmButton onConfirm={() => { setDays(DEFAULT_DAYS); setShowSettings(false); say("Дни возвращены к исходным"); }} question="Свои дни будут заменены" className="f-body w-full rounded-xl py-3 text-sm flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><RotateCcw size={15} /> Сбросить дни к исходным</ConfirmButton></div>
+          <ConfirmButton onConfirm={wipe} question="Стереть весь дневник?" className="f-body w-full rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.red, border: `1px solid ${C.line}` }}><Trash2 size={15} /> Удалить все записи</ConfirmButton>
           <button onClick={() => setShowSettings(false)} className="f-body w-full mt-2 py-3 text-sm" style={{ color: C.dim }}>Закрыть</button>
         </Sheet>
       )}
