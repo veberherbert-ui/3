@@ -697,7 +697,111 @@ function BaseTab({ days, setDays, initialView, conditions }) {
 }
 
 /* ============ JOURNAL ============ */
-function WorkoutCard({ w, isPR, onDelete }) {
+/** Правка уже записанной тренировки: подходы, дата, заметка. */
+function EditWorkout({ workout, onSave, onClose }) {
+  /* работаем на копии — «Отмена» должна оставлять запись нетронутой */
+  const [draft, setDraft] = useState(() => ({
+    ...workout,
+    exercises: workout.exercises.map((e) => ({ ...e, sets: e.sets.map((s) => ({ ...s })) })),
+  }));
+
+  const setField = (f, v) => setDraft((d) => ({ ...d, [f]: v }));
+  const updSet = (i, j, f, v) => setDraft((d) => {
+    const ex = [...d.exercises];
+    const e = { ...ex[i], sets: [...ex[i].sets] };
+    e.sets[j] = { ...e.sets[j], [f]: v };
+    ex[i] = e;
+    return { ...d, exercises: ex };
+  });
+  const addSet = (i) => setDraft((d) => {
+    const ex = [...d.exercises];
+    const e = { ...ex[i] };
+    const last = e.sets[e.sets.length - 1] || { reps: 8, weight: 0 };
+    e.sets = [...e.sets, { reps: last.reps, weight: e.bodyweight ? null : last.weight }];
+    ex[i] = e;
+    return { ...d, exercises: ex };
+  });
+  const rmSet = (i, j) => setDraft((d) => {
+    const ex = [...d.exercises];
+    ex[i] = { ...ex[i], sets: ex[i].sets.filter((_, k) => k !== j) };
+    return { ...d, exercises: ex };
+  });
+  const rmExercise = (i) => setDraft((d) => ({ ...d, exercises: d.exercises.filter((_, k) => k !== i) }));
+
+  /* пустые поля и подходы отбрасываем, иначе в статистику попадут нули */
+  const save = () => {
+    const exercises = draft.exercises
+      .map((e) => ({
+        ...e,
+        sets: e.sets
+          .filter((s) => s.reps !== "" && s.reps != null && (e.bodyweight || (s.weight !== "" && s.weight != null)))
+          .map((s) => ({ reps: +s.reps, weight: e.bodyweight ? null : +s.weight })),
+      }))
+      .filter((e) => e.sets.length);
+    onSave({ ...draft, exercises });
+  };
+
+  const inp = { background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` };
+  const total = workoutTonnage({
+    exercises: draft.exercises.map((e) => ({ ...e, sets: e.sets.filter((s) => s.reps && (e.bodyweight || s.weight)) })),
+  });
+
+  return (
+    <Sheet onClose={onClose}>
+      <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>Правка тренировки</div>
+      <div className="f-body text-xs mb-3" style={{ color: C.dim }}>
+        {draft.dayLabel} · сейчас {total.toLocaleString("ru-RU")} кг
+      </div>
+
+      <div className="flex gap-2 mb-3">
+        <input type="date" value={draft.date} onChange={(e) => setField("date", e.target.value)} className="f-num flex-1 rounded-lg px-3 py-2 text-sm min-w-0" style={inp} />
+        <input type="number" inputMode="numeric" value={draft.durationMin ?? ""} onChange={(e) => setField("durationMin", e.target.value === "" ? null : +e.target.value)} placeholder="мин" className="f-num w-20 rounded-lg px-2 py-2 text-sm text-center shrink-0" style={inp} />
+      </div>
+
+      <div className="space-y-2.5">
+        {draft.exercises.map((ex, i) => (
+          <div key={i} className="rounded-xl p-3" style={{ background: C.surfaceHi, border: `1px solid ${C.line}` }}>
+            <div className="flex items-start justify-between gap-2 mb-2">
+              <div className="f-body text-sm min-w-0" style={{ color: C.chalk }}>{ex.name}{ex.uni && <UniTag />}</div>
+              <button onClick={() => rmExercise(i)} className="shrink-0"><Trash2 size={14} color={C.dim} /></button>
+            </div>
+            <div className="space-y-1.5">
+              {ex.sets.map((s, j) => (
+                <div key={j} className="flex items-center gap-2">
+                  <span className="f-num text-[11px] w-3" style={{ color: C.dim }}>{j + 1}</span>
+                  <input type="number" inputMode="numeric" value={s.reps ?? ""} onChange={(e) => updSet(i, j, "reps", e.target.value)} placeholder="повт" className="f-num flex-1 rounded-lg px-2 py-1.5 text-sm text-center min-w-0" style={inp} />
+                  {!ex.bodyweight && (<>
+                    <span className="f-body text-[11px]" style={{ color: C.dim }}>×</span>
+                    <input type="number" inputMode="decimal" value={s.weight ?? ""} onChange={(e) => updSet(i, j, "weight", e.target.value)} placeholder="кг" className="f-num flex-1 rounded-lg px-2 py-1.5 text-sm text-center min-w-0" style={inp} />
+                  </>)}
+                  <button onClick={() => rmSet(i, j)} className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+                    <X size={14} color={C.dim} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => addSet(i)} className="f-body mt-2 text-xs" style={{ color: C.moss }}>+ подход</button>
+          </div>
+        ))}
+        {!draft.exercises.length && (
+          <div className="f-body text-sm text-center py-6" style={{ color: C.red }}>
+            Не осталось ни одного упражнения — сохранение удалит запись.
+          </div>
+        )}
+      </div>
+
+      <textarea value={draft.note || ""} onChange={(e) => setField("note", e.target.value)} rows={2} placeholder="Заметка…"
+        className="f-body w-full mt-3 rounded-xl px-3 py-2.5 text-sm resize-none" style={inp} />
+
+      <button onClick={save} className="f-display w-full mt-3 rounded-xl py-3.5 text-base font-semibold flex items-center justify-center gap-2" style={{ background: C.red, color: C.chalk }}>
+        <Check size={18} /> Сохранить изменения
+      </button>
+      <button onClick={onClose} className="f-body w-full mt-2 py-3 text-sm" style={{ color: C.dim }}>Отмена</button>
+    </Sheet>
+  );
+}
+
+function WorkoutCard({ w, isPR, onDelete, onEdit }) {
   const [open, setOpen] = useState(false);
   const t = workoutTonnage(w);
   return (
@@ -729,14 +833,22 @@ function WorkoutCard({ w, isPR, onDelete }) {
             </div>
           ))}
           {w.note && <div className="f-body text-[11px] pt-2" style={{ color: C.mustard }}>{w.note}</div>}
-          <button onClick={() => onDelete(w.id)} className="f-body text-[11px] mt-2 flex items-center gap-1" style={{ color: C.red }}><Trash2 size={11} /> Удалить запись</button>
+          <div className="flex gap-2 mt-2.5">
+            <button onClick={() => onEdit(w)} className="f-body flex-1 rounded-lg py-2 text-xs flex items-center justify-center gap-1.5" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
+              <Pencil size={12} /> Изменить
+            </button>
+            <button onClick={() => onDelete(w.id)} className="f-body rounded-lg px-3 py-2 text-xs flex items-center justify-center gap-1.5" style={{ background: C.surfaceHi, color: C.red, border: `1px solid ${C.line}` }}>
+              <Trash2 size={12} /> Удалить
+            </button>
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-function JournalTab({ workouts, onDelete, onExport }) {
+function JournalTab({ workouts, onDelete, onExport, onUpdate }) {
+  const [editing, setEditing] = useState(null);
   const sorted = [...workouts].sort((a, b) => b.date.localeCompare(a.date));
   const mk = today().slice(0, 7);
   const monthT = workouts.filter((w) => w.date.startsWith(mk)).reduce((s, w) => s + workoutTonnage(w), 0);
@@ -778,8 +890,16 @@ function JournalTab({ workouts, onDelete, onExport }) {
       </button>
       <div className="mt-4 space-y-2.5">
         {!sorted.length && <div className="f-body text-sm text-center py-12" style={{ color: C.dim }}>Пусто. Собери первую тренировку во вкладке «Сессия».</div>}
-        {sorted.map((w) => <WorkoutCard key={w.id} w={w} isPR={prs.has(w.id)} onDelete={onDelete} />)}
+        {sorted.map((w) => <WorkoutCard key={w.id} w={w} isPR={prs.has(w.id)} onDelete={onDelete} onEdit={setEditing} />)}
       </div>
+
+      {editing && (
+        <EditWorkout
+          workout={editing}
+          onClose={() => setEditing(null)}
+          onSave={(w) => { onUpdate(w); setEditing(null); }}
+        />
+      )}
     </div>
   );
 }
@@ -1281,6 +1401,12 @@ export default function App() {
   }), []);
   const finishSession = useCallback((w) => { setWorkouts((prev) => { const next = [w, ...prev]; saveKey("workouts", next); return next; }); setSession(null); setTab("journal"); }, [setSession]);
   const deleteWorkout = useCallback((id) => setWorkouts((prev) => { const next = prev.filter((w) => w.id !== id); saveKey("workouts", next); return next; }), []);
+  /* правка записи: пустая тренировка после удаления всех упражнений исчезает из журнала */
+  const updateWorkout = useCallback((w) => setWorkouts((prev) => {
+    const next = w.exercises.length ? prev.map((x) => (x.id === w.id ? w : x)) : prev.filter((x) => x.id !== w.id);
+    saveKey("workouts", next);
+    return next;
+  }), []);
   const addMetric = useCallback((m) => setMetrics((prev) => { const next = [...prev, m]; saveKey("metrics", next); return next; }), []);
   const deleteMetric = useCallback((id) => setMetrics((prev) => { const next = prev.filter((m) => m.id !== id); saveKey("metrics", next); return next; }), []);
 
@@ -1392,7 +1518,7 @@ export default function App() {
 
       <div className="flex-1 overflow-y-auto">
         {tab === "session" && <SessionTab session={session} setSession={setSession} workouts={workouts} days={days} onFinish={finishSession} goToDays={() => { setBaseView("days"); setTab("base"); }} conditions={conditions} restOverrides={restOverrides} setRestOverride={setRestOverride} muted={muted} />}
-        {tab === "journal" && <JournalTab workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} />}
+        {tab === "journal" && <JournalTab workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} onUpdate={updateWorkout} />}
         {tab === "progress" && <ProgressTab workouts={workouts} />}
         {tab === "base" && <BaseTab days={days} setDays={setDays} initialView={baseView} conditions={conditions} />}
         {tab === "body" && <BodyTab metrics={metrics} profile={profile} setProfile={setProfile} onAdd={addMetric} onDelete={deleteMetric} workouts={workouts} />}
