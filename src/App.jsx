@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { Plus, X, TrendingUp, BookOpen, Dumbbell, Flame, Settings, Trash2, Check, Info, Play, Timer, Calculator, Copy, ExternalLink, Activity, Pause, ChevronDown, ChevronUp, MoreHorizontal, Search, Library, Layers, Pencil, RotateCcw, Download, Upload, Share2, HardDrive } from "lucide-react";
+import { Plus, X, TrendingUp, BookOpen, Dumbbell, Flame, Settings, Trash2, Check, Info, Play, Timer, Calculator, Copy, ExternalLink, Activity, Pause, ChevronDown, ChevronUp, MoreHorizontal, Search, Library, Layers, Pencil, RotateCcw, Download, Upload, Share2, HardDrive, ShieldAlert, TriangleAlert, HeartPulse, Repeat2 } from "lucide-react";
 
 import { EXDB, GROUPS, ALL_MUSCLES, PUSH_M, PULL_M, PRESETS, DEFAULT_DAYS, isUni, isBW } from "./data/exercises.js";
+import { CONDITIONS, CONDITION_BY_ID, helpfulNote } from "./data/conditions.js";
+import { saferAlternatives, worstRisk, risksFor, dayWarnings } from "./lib/swap.js";
 import { C, plateColor } from "./lib/theme.js";
 import { today, daysAgo, fmtDate } from "./lib/dates.js";
 import {
@@ -34,12 +36,93 @@ const UniTag = () => (
   <span className="f-body text-[9px] rounded px-1 py-0.5 ml-1 align-middle" style={{ background: C.blue, color: C.chalk }}>×2</span>
 );
 
-function ExerciseInfo({ name, onClose, days, onAddToDay }) {
-  const info = EXDB[name];
+/* Маленький значок рядом с названием: красный — не рекомендуется при твоих
+   состояниях, жёлтый — с осторожностью. Без выбранных состояний не рисуется. */
+const RiskMark = ({ name, conditions }) => {
+  const r = worstRisk(name, conditions);
+  if (!r) return null;
+  return (
+    <span className="inline-flex align-middle ml-1" title={r === 2 ? "не рекомендуется при твоих ограничениях" : "с осторожностью"}>
+      {r === 2 ? <ShieldAlert size={13} color={C.red} /> : <TriangleAlert size={12} color={C.mustard} />}
+    </span>
+  );
+};
+
+/** Блок предупреждений и замен — показывается в карточке упражнения. */
+function RiskPanel({ name, conditions, onOpen }) {
+  const risks = risksFor(name, conditions);
+  const good = helpfulNote(name, conditions);
+  const alts = saferAlternatives(name, conditions);
+  if (!risks.length && !good) return null;
+
+  const worst = risks[0]?.level || 0;
+  const accent = worst === 2 ? C.red : worst === 1 ? C.mustard : C.moss;
+
+  return (
+    <div className="rounded-lg p-3 mb-3" style={{ background: C.surfaceHi, borderLeft: `3px solid ${accent}` }}>
+      {risks.length > 0 && (
+        <>
+          <div className="f-body text-[11px] uppercase tracking-wide mb-1.5 flex items-center gap-1.5" style={{ color: accent }}>
+            {worst === 2 ? <ShieldAlert size={13} /> : <TriangleAlert size={13} />}
+            {worst === 2 ? "Не рекомендуется" : "С осторожностью"}
+          </div>
+          <div className="space-y-1.5">
+            {risks.map((r) => (
+              <div key={r.id} className="f-body text-sm" style={{ color: C.chalk }}>
+                <span style={{ color: r.level === 2 ? C.red : C.mustard }}>{r.name}.</span>{" "}
+                {r.note || CONDITION_BY_ID[r.id]?.guide}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {good && (
+        <div className="f-body text-sm flex items-start gap-1.5" style={{ color: C.moss, marginTop: risks.length ? 10 : 0 }}>
+          <HeartPulse size={14} className="shrink-0 mt-0.5" />
+          <span><span className="font-medium">{good.name} — полезно.</span> {good.note}</span>
+        </div>
+      )}
+
+      {alts.length > 0 && (
+        <div className="mt-3">
+          <div className="f-body text-[11px] uppercase tracking-wide mb-1.5 flex items-center gap-1.5" style={{ color: C.dim }}>
+            <Repeat2 size={13} /> Чем заменить
+          </div>
+          <div className="space-y-1">
+            {alts.map((a) => (
+              <button key={a.name} onClick={() => onOpen?.(a.name)} className="w-full flex items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+                <span className="min-w-0">
+                  <span className="f-body text-xs block truncate" style={{ color: C.chalk }}>{a.name}</span>
+                  <span className="f-body text-[9px]" style={{ color: C.dim }}>
+                    {a.eq}
+                    {!a.sameMuscle && ` · другая мышца: ${a.muscle}`}
+                    {a.risk === 1 && " · тоже с осторожностью"}
+                  </span>
+                </span>
+                <ChevronDown size={13} color={C.dim} className="-rotate-90 shrink-0" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ExerciseInfo({ name, onClose, days, onAddToDay, conditions = [] }) {
+  const [shown, setShown] = useState(name);
+  useEffect(() => setShown(name), [name]);
+  const info = EXDB[shown];
   const [pick, setPick] = useState(false);
   return (
     <Sheet onClose={onClose}>
-      <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>{name}</div>
+      <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>
+        {shown}
+        {shown !== name && (
+          <button onClick={() => setShown(name)} className="f-body text-[11px] ml-2 align-middle" style={{ color: C.blue }}>← назад</button>
+        )}
+      </div>
       {info ? (<>
         <div className="flex flex-wrap gap-1.5 mb-3">
           <span className="f-body text-[11px] rounded-full px-2 py-0.5" style={{ background: C.red, color: C.chalk }}>{info.m}</span>
@@ -47,6 +130,7 @@ function ExerciseInfo({ name, onClose, days, onAddToDay }) {
           <span className="f-body text-[11px] rounded-full px-2 py-0.5" style={{ background: C.surfaceHi, color: C.dim, border: `1px solid ${C.line}` }}>{info.eq}</span>
           {info.uni && <span className="f-body text-[11px] rounded-full px-2 py-0.5" style={{ background: C.blue, color: C.chalk }}>одностороннее</span>}
         </div>
+        <RiskPanel name={shown} conditions={conditions} onOpen={setShown} />
         <div className="f-body text-sm leading-relaxed mb-3" style={{ color: C.chalk }}>{info.d}</div>
         <div className="rounded-lg p-3 mb-3" style={{ background: C.surfaceHi, borderLeft: `3px solid ${C.mustard}` }}>
           <div className="f-body text-[11px] uppercase tracking-wide mb-1" style={{ color: C.mustard }}>Ключ к технике</div>
@@ -55,7 +139,7 @@ function ExerciseInfo({ name, onClose, days, onAddToDay }) {
         {info.uni && <div className="f-body text-[11px] mb-3" style={{ color: C.blue }}>Одностороннее: записывай один подход — приложение считает обе стороны, тоннаж умножается на два.</div>}
       </>) : <div className="f-body text-sm mb-3" style={{ color: C.dim }}>Своё упражнение — описания пока нет.</div>}
 
-      <a href={ytLink(name)} target="_blank" rel="noopener noreferrer" className="f-body flex items-center justify-center gap-2 rounded-xl py-3 text-sm font-medium" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
+      <a href={ytLink(shown)} target="_blank" rel="noopener noreferrer" className="f-body flex items-center justify-center gap-2 rounded-xl py-3 text-sm font-medium" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
         <ExternalLink size={15} /> Разборы техники на YouTube
       </a>
 
@@ -63,8 +147,8 @@ function ExerciseInfo({ name, onClose, days, onAddToDay }) {
         <div className="mt-2 space-y-1.5">
           <div className="f-body text-xs" style={{ color: C.dim }}>В какой день добавить?</div>
           {days.map((d) => (
-            <button key={d.id} onClick={() => { onAddToDay(d.id, name); onClose(); }} className="f-body w-full text-left rounded-lg px-3 py-2.5 text-sm" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
-              {d.name}{d.exercises.includes(name) && <span style={{ color: C.moss }}> · уже есть</span>}
+            <button key={d.id} onClick={() => { onAddToDay(d.id, shown); onClose(); }} className="f-body w-full text-left rounded-lg px-3 py-2.5 text-sm" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
+              {d.name}{d.exercises.includes(shown) && <span style={{ color: C.moss }}> · уже есть</span>}
             </button>
           ))}
         </div>
@@ -117,7 +201,7 @@ function RestTimer({ restUntil, onDone }) {
   );
 }
 
-function SessionTab({ session, setSession, workouts, days, onFinish, goToDays }) {
+function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, conditions }) {
   const [pickDay, setPickDay] = useState(days[0]?.id);
   const [picked, setPicked] = useState([]);
   const [custom, setCustom] = useState("");
@@ -177,7 +261,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays })
                   {on && <Check size={13} color={C.chalk} />}
                 </button>
                 <button onClick={() => toggle(n)} className="flex-1 text-left min-w-0">
-                  <div className="f-body text-sm truncate" style={{ color: on ? C.chalk : C.dim }}>{n}{isUni(n) && <UniTag />}</div>
+                  <div className="f-body text-sm truncate" style={{ color: on ? C.chalk : C.dim }}>{n}{isUni(n) && <UniTag />}<RiskMark name={n} conditions={conditions} /></div>
                   {prev && <div className="f-num text-[10px] truncate" style={{ color: C.dim }}>{fmtDate(prev.date)}: {setsLine(prev.ex)}</div>}
                   {up && <div className="f-body text-[10px]" style={{ color: C.mustard }}>выбил верх диапазона — пробуй +2.5 кг</div>}
                 </button>
@@ -193,7 +277,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays })
         <button onClick={start} disabled={!picked.length} className="f-display w-full mt-5 rounded-xl py-3.5 text-base font-semibold flex items-center justify-center gap-2" style={{ background: picked.length ? C.red : C.surface, color: picked.length ? C.chalk : C.dim }}>
           <Play size={18} /> Начать тренировку ({picked.length})
         </button>
-        {info && <ExerciseInfo name={info} onClose={() => setInfo(null)} />}
+        {info && <ExerciseInfo name={info} onClose={() => setInfo(null)} conditions={conditions} />}
       </div>
     );
   }
@@ -261,7 +345,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays })
             <div key={i} className="rounded-xl p-3" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
               <div className="flex items-start justify-between gap-2 mb-2">
                 <div className="min-w-0">
-                  <div className="f-body text-sm font-medium" style={{ color: C.chalk }}>{ex.name}{ex.uni && <UniTag />}</div>
+                  <div className="f-body text-sm font-medium" style={{ color: C.chalk }}>{ex.name}{ex.uni && <UniTag />}<RiskMark name={ex.name} conditions={conditions} /></div>
                   {ex.uni && <div className="f-body text-[10px]" style={{ color: C.blue }}>вводи один подход — считается за обе стороны</div>}
                   {prev && <div className="f-num text-[10px] truncate" style={{ color: C.dim }}>прошлый раз: {setsLine(prev.ex)}</div>}
                 </div>
@@ -307,13 +391,13 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays })
           <button onClick={() => setMenu(false)} className="f-body w-full mt-2 py-3 text-sm" style={{ color: C.dim }}>Отмена</button>
         </Sheet>
       )}
-      {info && <ExerciseInfo name={info} onClose={() => setInfo(null)} />}
+      {info && <ExerciseInfo name={info} onClose={() => setInfo(null)} conditions={conditions} />}
     </div>
   );
 }
 
 /* ============ CATALOG / DAYS ============ */
-function Catalog({ days, onAddToDay }) {
+function Catalog({ days, onAddToDay, conditions }) {
   const [q, setQ] = useState("");
   const [openG, setOpenG] = useState(null);
   const [openM, setOpenM] = useState(null);
@@ -336,7 +420,7 @@ function Catalog({ days, onAddToDay }) {
           {!found.length && <div className="f-body text-sm text-center py-8" style={{ color: C.dim }}>Ничего не нашлось.</div>}
           {found.map((n) => (
             <button key={n} onClick={() => setInfo(n)} className="w-full text-left rounded-xl px-3 py-2.5" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
-              <div className="f-body text-sm" style={{ color: C.chalk }}>{n}{isUni(n) && <UniTag />}</div>
+              <div className="f-body text-sm" style={{ color: C.chalk }}>{n}{isUni(n) && <UniTag />}<RiskMark name={n} conditions={conditions} /></div>
               <div className="f-body text-[10px]" style={{ color: C.dim }}>{EXDB[n].m} · {EXDB[n].eq}</div>
             </button>
           ))}
@@ -369,7 +453,7 @@ function Catalog({ days, onAddToDay }) {
                             <div className="pb-1">
                               {m.list.map((n) => (
                                 <button key={n} onClick={() => setInfo(n)} className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left" style={{ borderTop: `1px solid ${C.line}` }}>
-                                  <span className="f-body text-xs min-w-0" style={{ color: C.chalk }}>{n}{isUni(n) && <UniTag />}</span>
+                                  <span className="f-body text-xs min-w-0" style={{ color: C.chalk }}>{n}{isUni(n) && <UniTag />}<RiskMark name={n} conditions={conditions} /></span>
                                   <span className="f-body text-[9px] shrink-0" style={{ color: C.dim }}>{EXDB[n].eq}</span>
                                 </button>
                               ))}
@@ -385,12 +469,12 @@ function Catalog({ days, onAddToDay }) {
           })}
         </div>
       )}
-      {info && <ExerciseInfo name={info} onClose={() => setInfo(null)} days={days} onAddToDay={onAddToDay} />}
+      {info && <ExerciseInfo name={info} onClose={() => setInfo(null)} days={days} onAddToDay={onAddToDay} conditions={conditions} />}
     </div>
   );
 }
 
-function DaysEditor({ days, setDays }) {
+function DaysEditor({ days, setDays, conditions }) {
   const [open, setOpen] = useState(null);
   const [pickFor, setPickFor] = useState(null);
   const [presets, setPresets] = useState(false);
@@ -426,12 +510,17 @@ function DaysEditor({ days, setDays }) {
       <div className="space-y-2">
         {days.map((d) => {
           const o = open === d.id;
+          const warn = dayWarnings(d.exercises, conditions);
           return (
             <div key={d.id} className="rounded-xl overflow-hidden" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
               <button onClick={() => setOpen(o ? null : d.id)} className="w-full flex items-center justify-between px-3.5 py-3">
                 <div className="min-w-0 text-left">
                   <div className="f-display text-sm font-semibold truncate" style={{ color: C.chalk }}>{d.name}</div>
-                  <div className="f-body text-[11px]" style={{ color: C.dim }}>{d.exercises.length} упражнений</div>
+                  <div className="f-body text-[11px] flex items-center gap-2" style={{ color: C.dim }}>
+                    <span>{d.exercises.length} упражнений</span>
+                    {warn.avoid > 0 && <span className="flex items-center gap-0.5" style={{ color: C.red }}><ShieldAlert size={11} />{warn.avoid}</span>}
+                    {warn.care > 0 && <span className="flex items-center gap-0.5" style={{ color: C.mustard }}><TriangleAlert size={11} />{warn.care}</span>}
+                  </div>
                 </div>
                 {o ? <ChevronUp size={15} color={C.dim} /> : <ChevronDown size={15} color={C.dim} />}
               </button>
@@ -446,7 +535,7 @@ function DaysEditor({ days, setDays }) {
                           <button onClick={() => move(d.id, i, 1)} className="h-3.5"><ChevronDown size={12} color={C.dim} /></button>
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className="f-body text-xs truncate" style={{ color: C.chalk }}>{n}{isUni(n) && <UniTag />}</div>
+                          <div className="f-body text-xs truncate" style={{ color: C.chalk }}>{n}{isUni(n) && <UniTag />}<RiskMark name={n} conditions={conditions} /></div>
                           {EXDB[n] && <div className="f-body text-[9px]" style={{ color: C.dim }}>{EXDB[n].m}</div>}
                         </div>
                         <button onClick={() => removeEx(d.id, n)} className="shrink-0"><X size={14} color={C.dim} /></button>
@@ -476,7 +565,7 @@ function DaysEditor({ days, setDays }) {
               return (
                 <button key={n} onClick={() => addEx(pickFor, n)} disabled={has} className="w-full flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-left" style={{ background: C.surfaceHi, opacity: has ? 0.45 : 1 }}>
                   <span className="min-w-0">
-                    <span className="f-body text-xs block truncate" style={{ color: C.chalk }}>{n}{isUni(n) && <UniTag />}</span>
+                    <span className="f-body text-xs block truncate" style={{ color: C.chalk }}>{n}{isUni(n) && <UniTag />}<RiskMark name={n} conditions={conditions} /></span>
                     <span className="f-body text-[9px]" style={{ color: C.dim }}>{EXDB[n].m} · {EXDB[n].eq}</span>
                   </span>
                   {has ? <Check size={14} color={C.moss} /> : <Plus size={14} color={C.moss} />}
@@ -508,7 +597,7 @@ function DaysEditor({ days, setDays }) {
   );
 }
 
-function BaseTab({ days, setDays, initialView }) {
+function BaseTab({ days, setDays, initialView, conditions }) {
   const [view, setView] = useState(initialView || "catalog");
   useEffect(() => { if (initialView) setView(initialView); }, [initialView]);
   const addToDay = (id, n) => setDays(days.map((d) => (d.id === id && !d.exercises.includes(n) ? { ...d, exercises: [...d.exercises, n] } : d)));
@@ -519,7 +608,7 @@ function BaseTab({ days, setDays, initialView }) {
           <button key={id} onClick={() => setView(id)} className="f-body flex-1 text-xs py-2" style={{ background: view === id ? C.red : C.surface, color: view === id ? C.chalk : C.dim }}>{l}</button>
         ))}
       </div>
-      {view === "catalog" ? <Catalog days={days} onAddToDay={addToDay} /> : <DaysEditor days={days} setDays={setDays} />}
+      {view === "catalog" ? <Catalog days={days} onAddToDay={addToDay} conditions={conditions} /> : <DaysEditor days={days} setDays={setDays} conditions={conditions} />}
     </div>
   );
 }
@@ -785,6 +874,62 @@ const MEASURES = [
 ];
 const PCT = [[100, 1], [95, 2], [92, 3], [90, 4], [87, 5], [85, 6], [83, 7], [80, 8], [77, 9], [75, 10], [70, 12], [65, 15]];
 
+/** Выбор своих травм и состояний. Отсюда берутся предупреждения по всему приложению. */
+function ConditionsCard({ profile, setProfile }) {
+  const [open, setOpen] = useState(false);
+  const picked = profile.conditions || [];
+  const toggle = (id) =>
+    setProfile({ ...profile, conditions: picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id] });
+
+  return (
+    <div className="rounded-xl p-3.5" style={{ background: C.surface, border: `1px solid ${picked.length ? C.mustard : C.line}` }}>
+      <button onClick={() => setOpen(!open)} className="w-full flex items-center justify-between gap-2">
+        <div className="min-w-0 text-left">
+          <div className="f-display text-sm font-semibold flex items-center gap-1.5" style={{ color: C.chalk }}>
+            <ShieldAlert size={14} color={picked.length ? C.mustard : C.dim} /> Травмы и ограничения
+          </div>
+          <div className="f-body text-[11px] truncate" style={{ color: C.dim }}>
+            {picked.length ? picked.map((id) => CONDITION_BY_ID[id]?.name).filter(Boolean).join(", ") : "не выбрано — предупреждений не будет"}
+          </div>
+        </div>
+        {open ? <ChevronUp size={15} color={C.dim} /> : <ChevronDown size={15} color={C.dim} />}
+      </button>
+
+      {open && (
+        <div className="mt-3">
+          <div className="f-body text-[11px] mb-2.5" style={{ color: C.dim }}>
+            Отметь свои проблемные места. В базе упражнений появятся предупреждения и подсказки, чем заменить.
+          </div>
+          <div className="space-y-1.5">
+            {CONDITIONS.map((c) => {
+              const on = picked.includes(c.id);
+              return (
+                <button key={c.id} onClick={() => toggle(c.id)} className="w-full flex items-start gap-2.5 rounded-lg px-3 py-2.5 text-left"
+                  style={{ background: C.surfaceHi, border: `1px solid ${on ? C.mustard : C.line}` }}>
+                  <span className="shrink-0 w-5 h-5 rounded flex items-center justify-center mt-0.5"
+                    style={{ background: on ? C.mustard : "transparent", border: `1px solid ${on ? C.mustard : C.line}` }}>
+                    {on && <Check size={13} color={C.bg} />}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="f-body text-sm block" style={{ color: on ? C.chalk : C.dim }}>{c.name}</span>
+                    <span className="f-body text-[10px] block" style={{ color: C.dim }}>{c.hint}</span>
+                    {on && <span className="f-body text-[11px] block mt-1.5" style={{ color: C.chalk }}>{c.guide}</span>}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="f-body text-[10px] mt-3 leading-relaxed" style={{ color: C.dim }}>
+            Это не медицинские предписания, а ориентиры по механике движений. Приложение не знает твоего диагноза:
+            «не рекомендуется» значит «у движения известны проблемы при таком состоянии», а не запрет. При настоящей
+            травме порядок обратный — сначала врач, потом приложение.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BodyTab({ metrics, profile, setProfile, onAdd, onDelete, workouts }) {
   const [form, setForm] = useState({ date: today() });
   const [showForm, setShowForm] = useState(false);
@@ -861,6 +1006,8 @@ function BodyTab({ metrics, profile, setProfile, onAdd, onDelete, workouts }) {
           <option value="1.725">Высокая (6–7 трен/нед)</option>
         </select>
       </div>
+
+      <ConditionsCard profile={profile} setProfile={setProfile} />
 
       {latest ? (
         <div>
@@ -1010,7 +1157,7 @@ export default function App() {
   const [metrics, setMetrics] = useState([]);
   const [days, setDaysState] = useState([]);
   const [session, setSessionState] = useState(null);
-  const [profile, setProfileState] = useState({ height: "", age: "", sex: "m", activity: "1.55" });
+  const [profile, setProfileState] = useState({ height: "", age: "", sex: "m", activity: "1.55", conditions: [] });
   const [showSettings, setShowSettings] = useState(false);
   const [exportText, setExportText] = useState(null);
   const [importText, setImportText] = useState(null);
@@ -1073,6 +1220,9 @@ export default function App() {
     });
     setExportText(lines.join("\n")); setCopied(false);
   };
+
+  /** Состояния здоровья — из них берутся предупреждения по всему приложению. */
+  const conditions = useMemo(() => profile.conditions || [], [profile.conditions]);
 
   const backupJSON = () => JSON.stringify({ v: 1, workouts, metrics, days, profile }, null, 0);
 
@@ -1146,10 +1296,10 @@ export default function App() {
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        {tab === "session" && <SessionTab session={session} setSession={setSession} workouts={workouts} days={days} onFinish={finishSession} goToDays={() => { setBaseView("days"); setTab("base"); }} />}
+        {tab === "session" && <SessionTab session={session} setSession={setSession} workouts={workouts} days={days} onFinish={finishSession} goToDays={() => { setBaseView("days"); setTab("base"); }} conditions={conditions} />}
         {tab === "journal" && <JournalTab workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} />}
         {tab === "progress" && <ProgressTab workouts={workouts} />}
-        {tab === "base" && <BaseTab days={days} setDays={setDays} initialView={baseView} />}
+        {tab === "base" && <BaseTab days={days} setDays={setDays} initialView={baseView} conditions={conditions} />}
         {tab === "body" && <BodyTab metrics={metrics} profile={profile} setProfile={setProfile} onAdd={addMetric} onDelete={deleteMetric} workouts={workouts} />}
       </div>
 
