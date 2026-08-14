@@ -6,7 +6,8 @@
   "description": "Железный дневник — трекер силовых тренировок, работает офлайн",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "check": "node tools/check-data.mjs",
+    "build": "node tools/check-data.mjs && vite build",
     "preview": "vite preview",
     "smoke": "node tools/smoke.mjs",
     "icons": "node tools/make-icons.mjs"
