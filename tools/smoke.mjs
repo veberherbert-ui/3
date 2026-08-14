@@ -112,6 +112,48 @@ const edited = await dbRead("workouts");
 ok(edited?.[0]?.exercises?.[0]?.sets?.[0]?.weight === 45, "вес исправлен");
 ok(edited?.[0]?.id === saved?.[0]?.id, "запись та же, не создалась новая");
 
+section("Мелочи");
+/* необратимые действия должны спрашивать подтверждение */
+await tab("Журнал");
+/* карточка могла остаться раскрытой после правки — разворачиваем только если закрыта */
+if (!(await page.getByRole("button", { name: /Изменить/ }).isVisible().catch(() => false))) {
+  await page.locator("text=Грудь + Бицепс").first().click();
+  await page.waitForTimeout(500);
+}
+await page.getByRole("button", { name: /Удалить/ }).first().click();
+await page.waitForTimeout(400);
+ok(await page.getByText("Удалить тренировку?").isVisible(), "удаление спрашивает подтверждение");
+await page.getByRole("button", { name: "Нет", exact: true }).click();
+await page.waitForTimeout(400);
+ok((await dbRead("workouts"))?.length === 1, "отказ ничего не удалил");
+
+/* в интерфейсе не должно остаться упоминаний Claude */
+const journalText = await page.locator("body").innerText();
+ok(!/claude/i.test(journalText), "в журнале нет упоминаний Claude");
+
+/* повтор прошлой тренировки и добавление упражнения на ходу */
+await tab("Сессия");
+ok(await page.getByRole("button", { name: /Повторить прошлую/ }).isVisible(), "есть кнопка повтора прошлой тренировки");
+await page.getByRole("button", { name: /Повторить прошлую/ }).click();
+await page.waitForTimeout(800);
+const before = await page.locator("button:has-text('+ подход')").count();
+await page.getByRole("button", { name: /Добавить упражнение/ }).click();
+await page.waitForTimeout(600);
+await page.getByPlaceholder(/Поиск по названию/).fill("фейспул");
+await page.waitForTimeout(500);
+await page.getByText("Фейспул", { exact: false }).first().click();
+await page.waitForTimeout(400);
+await page.getByRole("button", { name: "Готово" }).click();
+await page.waitForTimeout(600);
+const after = await page.locator("button:has-text('+ подход')").count();
+ok(after === before + 1, "упражнение добавилось в идущую тренировку", `${before} → ${after}`);
+await page.locator("button:has(svg.lucide-ellipsis)").first().click();
+await page.waitForTimeout(500);
+await page.getByRole("button", { name: /Прервать без сохранения/ }).click();
+await page.waitForTimeout(400);
+await page.getByRole("button", { name: "Да", exact: true }).click();
+await page.waitForTimeout(800);
+
 section("Травмы и замены");
 await tab("Тело");
 await page.getByText("Травмы и ограничения").click();
