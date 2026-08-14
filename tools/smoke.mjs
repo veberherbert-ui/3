@@ -42,6 +42,13 @@ const dbRead = (key) => page.evaluate(async (k) => {
   return new Promise((r) => { const t = db.transaction("kv").objectStore("kv").get(k); t.onsuccess = () => r(t.result); });
 }, key);
 
+const daysAgoISO = (n) => {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  const p = (x) => String(x).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+
 const tab = async (name) => {
   await page.getByRole("button", { name, exact: true }).click();
   await page.waitForTimeout(500);
@@ -160,6 +167,28 @@ await page.waitForTimeout(400);
 await page.getByRole("button", { name: "Да", exact: true }).click();
 await page.waitForTimeout(800);
 
+section("Запись задним числом");
+await tab("Журнал");
+await page.getByRole("button", { name: /Записать прошлую тренировку/ }).click();
+await page.waitForTimeout(600);
+ok(await page.getByText("Какой это был день?").isVisible(), "спрашивает, что это был за день");
+await page.getByRole("button", { name: /Спина \+ Задняя дельта/ }).click();
+await page.waitForTimeout(700);
+const dateField = page.locator('input[type="date"]');
+const def = await dateField.inputValue();
+ok(def === daysAgoISO(1), "дата по умолчанию — вчера", def);
+const past = def.slice(0, 8) + "05";
+await dateField.fill(past);
+await page.getByPlaceholder("повт").first().fill("8");
+await page.getByPlaceholder("кг").first().fill("70");
+await page.getByRole("button", { name: /Записать в журнал/ }).click();
+await page.waitForTimeout(1100);
+const list = await dbRead("workouts");
+const added = list?.find((w) => w.date === past);
+ok(!!added, "тренировка записана прошедшей датой", past);
+ok(added?.exercises?.length === 1, "пустые упражнения отброшены");
+ok(list?.length === 2, "прежняя запись на месте");
+
 section("Травмы и замены");
 await tab("Тело");
 await page.getByText("Травмы и ограничения").click();
@@ -188,6 +217,7 @@ await page.waitForTimeout(400);
 section("Резервная копия");
 await page.locator('button[aria-label="Настройки"]').click();
 await page.waitForTimeout(500);
+const beforeBackup = (await dbRead("workouts"))?.length || 0;
 const backup = JSON.stringify({ v: 1, workouts: await dbRead("workouts"), metrics: [], days: await dbRead("days"), profile: await dbRead("profile") });
 await page.getByRole("button", { name: "Восстановить из копии" }).click();
 await page.waitForTimeout(500);
@@ -199,7 +229,7 @@ ok(await page.getByText(/не похоже на резервную копию/).
 await page.getByPlaceholder(/Вставь сюда/).fill(backup);
 await page.getByRole("button", { name: /Восстановить из текста/ }).click();
 await page.waitForTimeout(1000);
-ok((await dbRead("workouts"))?.length === 1, "копия восстановилась");
+ok((await dbRead("workouts"))?.length === beforeBackup, "копия восстановилась", `${beforeBackup} записей`);
 
 section("Работа без сети");
 await page.waitForFunction(() => navigator.serviceWorker?.controller !== null, null, { timeout: 20000 }).catch(() => {});
@@ -225,7 +255,7 @@ await page.getByPlaceholder("повт").first().fill("8");
 await page.getByPlaceholder("кг").first().fill("60");
 await page.getByRole("button", { name: /Завершить и сохранить/ }).first().click();
 await page.waitForTimeout(1200);
-ok((await dbRead("workouts"))?.length === 2, "новая тренировка записывается без сети");
+ok((await dbRead("workouts"))?.length === beforeBackup + 1, "новая тренировка записывается без сети");
 await ctx.setOffline(false);
 
 section("Читаемость и доступность");

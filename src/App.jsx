@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue, lazy, Suspense } from "react";
-import { Plus, X, TrendingUp, BookOpen, Dumbbell, Flame, Settings, Trash2, Check, Info, Play, Timer, Calculator, Copy, ExternalLink, Activity, Pause, ChevronDown, ChevronUp, MoreHorizontal, Search, Library, Layers, Pencil, RotateCcw, Download, Upload, Share2, HardDrive, ShieldAlert, TriangleAlert, HeartPulse, Repeat2, Volume2, VolumeX, RefreshCw, FileText, Type } from "lucide-react";
+import { Plus, X, TrendingUp, BookOpen, Dumbbell, Flame, Settings, Trash2, Check, Info, Play, Timer, Calculator, Copy, ExternalLink, Activity, Pause, ChevronDown, ChevronUp, MoreHorizontal, Search, Library, Layers, Pencil, RotateCcw, Download, Upload, Share2, HardDrive, ShieldAlert, TriangleAlert, HeartPulse, Repeat2, Volume2, VolumeX, RefreshCw, FileText, Type, CalendarPlus } from "lucide-react";
 
 import { EXDB, GROUPS, ALL_MUSCLES, PUSH_M, PULL_M, PRESETS, DEFAULT_DAYS, isUni, isBW } from "./data/exercises.js";
 import { CONDITIONS, CONDITION_BY_ID, helpfulNote } from "./data/conditions.js";
@@ -306,6 +306,34 @@ function ExerciseInfo({ name, onClose, days, onAddToDay, conditions = [] }) {
   );
 }
 
+/* ============ общее для сессии и записи задним числом ============ */
+
+/** Последний раз, когда это упражнение делали. */
+function lastExerciseOf(workouts, name) {
+  for (const w of [...workouts].sort((a, b) => b.date.localeCompare(a.date))) {
+    const ex = w.exercises.find((e) => e.name === name);
+    if (ex) return { date: w.date, ex };
+  }
+  return null;
+}
+
+/** Заготовка упражнения: число подходов и веса берутся из прошлого раза. */
+function draftExercise(name, workouts) {
+  const prev = lastExerciseOf(workouts, name);
+  const bw = isBW(name);
+  const nSets = prev ? prev.ex.sets.length : 3;
+  return {
+    name,
+    bodyweight: bw,
+    uni: isUni(name),
+    sets: Array.from({ length: nSets }, (_, i) => ({
+      reps: "",
+      weight: bw ? null : prev?.ex.sets[i]?.weight ?? prev?.ex.sets[0]?.weight ?? "",
+      done: false,
+    })),
+  };
+}
+
 /* ============ SESSION ============ */
 const elapsedMs = (s, now) => (s.accumMs || 0) + (s.paused ? 0 : now - (s.resumedAt || s.startedAt || now));
 const fmtClock = (ms) => { const t = Math.max(0, Math.floor(ms / 1000)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`; };
@@ -430,30 +458,11 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
     });
   }, [setSession]);
 
-  const lastFor = useCallback((name) => {
-    for (const w of [...workouts].sort((a, b) => b.date.localeCompare(a.date))) {
-      const ex = w.exercises.find((e) => e.name === name);
-      if (ex) return { date: w.date, ex };
-    }
-    return null;
-  }, [workouts]);
+  const lastFor = useCallback((name) => lastExerciseOf(workouts, name), [workouts]);
 
   const setsLine = (ex) => ex.sets.map((s) => (ex.bodyweight ? s.reps : `${s.reps}×${s.weight}`)).join(" · ");
 
-  /** Заготовка упражнения: число подходов и веса берутся из прошлого раза. */
-  const blankExercise = useCallback((n) => {
-    const prev = lastFor(n);
-    const bw = isBW(n);
-    const nSets = prev ? prev.ex.sets.length : 3;
-    return {
-      name: n, bodyweight: bw, uni: isUni(n),
-      sets: Array.from({ length: nSets }, (_, i) => ({
-        reps: "",
-        weight: bw ? null : prev?.ex.sets[i]?.weight ?? prev?.ex.sets[0]?.weight ?? "",
-        done: false,
-      })),
-    };
-  }, [lastFor]);
+  const blankExercise = useCallback((n) => draftExercise(n, workouts), [workouts]);
 
   /** Последняя тренировка этого дня — для кнопки «повторить». */
   const lastWorkoutOfDay = useMemo(() => {
@@ -888,8 +897,12 @@ function BaseTab({ days, setDays, initialView, conditions }) {
 }
 
 /* ============ JOURNAL ============ */
-/** Правка уже записанной тренировки: подходы, дата, заметка. */
-function EditWorkout({ workout, onSave, onClose }) {
+/**
+ * Форма тренировки: правка записанной и запись задним числом — одно и то же.
+ * Разница только в заголовке и в том, куда уходит результат.
+ */
+function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [], isNew = false }) {
+  const [adding, setAdding] = useState(false);
   /* работаем на копии — «Отмена» должна оставлять запись нетронутой */
   const [draft, setDraft] = useState(() => ({
     ...workout,
@@ -918,6 +931,8 @@ function EditWorkout({ workout, onSave, onClose }) {
     return { ...d, exercises: ex };
   });
   const rmExercise = (i) => setDraft((d) => ({ ...d, exercises: d.exercises.filter((_, k) => k !== i) }));
+  const addExercise = (n) =>
+    setDraft((d) => (d.exercises.some((e) => e.name === n) ? d : { ...d, exercises: [...d.exercises, draftExercise(n, workouts)] }));
 
   /* пустые поля и подходы отбрасываем, иначе в статистику попадут нули */
   const save = () => {
@@ -939,14 +954,24 @@ function EditWorkout({ workout, onSave, onClose }) {
 
   return (
     <Sheet onClose={onClose}>
-      <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>Правка тренировки</div>
+      <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>
+        {isNew ? "Записать тренировку" : "Правка тренировки"}
+      </div>
       <div className="f-body text-xs mb-3" style={{ color: C.dim }}>
         {draft.dayLabel} · сейчас {total.toLocaleString("ru-RU")} кг
       </div>
 
       <div className="flex gap-2 mb-3">
-        <input type="date" value={draft.date} onChange={(e) => setField("date", e.target.value)} className="f-num flex-1 rounded-lg px-3 py-2 text-sm min-w-0" style={inp} />
-        <input type="number" inputMode="numeric" value={draft.durationMin ?? ""} onChange={(e) => setField("durationMin", e.target.value === "" ? null : +e.target.value)} placeholder="мин" className="f-num w-20 rounded-lg px-2 py-2 text-sm text-center shrink-0" style={inp} />
+        <label className="flex-1 min-w-0">
+          <span className="f-body text-2xs block mb-1" style={{ color: C.dim }}>Дата тренировки</span>
+          <input type="date" value={draft.date} max={today()} onChange={(e) => setField("date", e.target.value)}
+            className="f-num w-full rounded-lg px-3 py-2 text-sm" style={inp} />
+        </label>
+        <label className="w-24 shrink-0">
+          <span className="f-body text-2xs block mb-1" style={{ color: C.dim }}>Минут</span>
+          <input type="number" inputMode="numeric" value={draft.durationMin ?? ""} onChange={(e) => setField("durationMin", e.target.value === "" ? null : +e.target.value)}
+            placeholder="—" className="f-num w-full rounded-lg px-2 py-2 text-sm text-center" style={inp} />
+        </label>
       </div>
 
       <div className="space-y-2.5">
@@ -981,13 +1006,30 @@ function EditWorkout({ workout, onSave, onClose }) {
         )}
       </div>
 
+      <button onClick={() => setAdding(true)} className="f-body w-full mt-2.5 rounded-xl py-3 text-sm flex items-center justify-center gap-2"
+        style={{ background: C.surfaceHi, color: C.mossText, border: `1px solid ${C.line}` }}>
+        <Plus size={16} /> Добавить упражнение
+      </button>
+
       <textarea value={draft.note || ""} onChange={(e) => setField("note", e.target.value)} rows={2} placeholder="Заметка…"
         className="f-body w-full mt-3 rounded-xl px-3 py-2.5 text-sm resize-none" style={inp} />
 
-      <button onClick={save} className="f-display w-full mt-3 rounded-xl py-3.5 text-base font-semibold flex items-center justify-center gap-2" style={{ background: C.red, color: C.chalk }}>
-        <Check size={18} /> Сохранить изменения
+      <button onClick={save} disabled={!draft.exercises.length}
+        className="f-display w-full mt-3 rounded-xl py-3.5 text-base font-semibold flex items-center justify-center gap-2"
+        style={{ background: draft.exercises.length ? C.red : C.surfaceHi, color: draft.exercises.length ? C.chalk : C.dim }}>
+        <Check size={18} /> {isNew ? "Записать в журнал" : "Сохранить изменения"}
       </button>
       <button onClick={onClose} className="f-body w-full mt-2 py-3 text-sm" style={{ color: C.dim }}>Отмена</button>
+
+      {adding && (
+        <ExercisePicker
+          title="Добавить упражнение"
+          conditions={conditions}
+          has={(n) => draft.exercises.some((e) => e.name === n)}
+          onPick={addExercise}
+          onClose={() => setAdding(false)}
+        />
+      )}
     </Sheet>
   );
 }
@@ -1038,8 +1080,24 @@ function WorkoutCard({ w, isPR, onDelete, onEdit }) {
   );
 }
 
-function JournalTab({ workouts, onDelete, onExport, onUpdate }) {
+function JournalTab({ workouts, onDelete, onExport, onUpdate, onAdd, days, conditions }) {
   const [editing, setEditing] = useState(null);
+  /* запись задним числом: сначала выбираем день, потом заполняем ту же форму */
+  const [pickDay, setPickDay] = useState(false);
+  const [creating, setCreating] = useState(null);
+
+  const startBackdated = (day) => {
+    setPickDay(false);
+    setCreating({
+      id: uid(),
+      date: daysAgo(1),
+      dayId: day?.id ?? null,
+      dayLabel: day?.name || "Своя тренировка",
+      note: "",
+      durationMin: null,
+      exercises: (day?.exercises || []).map((n) => draftExercise(n, workouts)),
+    });
+  };
 
   /* Всё это считается по всей истории тренировок. Без запоминания пересчёт
      шёл при каждой отрисовке и задерживал открытие вкладки. */
@@ -1085,6 +1143,9 @@ function JournalTab({ workouts, onDelete, onExport, onUpdate }) {
           </div>
         </div>
       )}
+      <button onClick={() => setPickDay(true)} className="f-body w-full mt-2 rounded-xl py-3 text-sm flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
+        <CalendarPlus size={16} /> Записать прошлую тренировку
+      </button>
       <button onClick={onExport} className="f-body w-full mt-2 rounded-xl py-2.5 text-sm flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
         <Share2 size={15} /> Выгрузить дневник текстом
       </button>
@@ -1096,8 +1157,45 @@ function JournalTab({ workouts, onDelete, onExport, onUpdate }) {
       {editing && (
         <EditWorkout
           workout={editing}
+          workouts={workouts}
+          conditions={conditions}
           onClose={() => setEditing(null)}
           onSave={(w) => { onUpdate(w); setEditing(null); }}
+        />
+      )}
+
+      {pickDay && (
+        <Sheet onClose={() => setPickDay(false)}>
+          <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>Какой это был день?</div>
+          <div className="f-body text-xs mb-3" style={{ color: C.dim }}>
+            Упражнения подставятся из выбранного дня — останется вписать подходы и поправить дату.
+          </div>
+          <div className="space-y-1.5">
+            {days.map((d) => (
+              <button key={d.id} onClick={() => startBackdated(d)} className="f-body w-full text-left rounded-lg px-3 py-3 text-sm"
+                style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
+                {d.name}
+                <span className="f-body text-2xs block" style={{ color: C.dim }}>{d.exercises.length} упражнений</span>
+              </button>
+            ))}
+            <button onClick={() => startBackdated(null)} className="f-body w-full text-left rounded-lg px-3 py-3 text-sm"
+              style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
+              Своя тренировка
+              <span className="f-body text-2xs block" style={{ color: C.dim }}>начать с пустого списка</span>
+            </button>
+          </div>
+          <button onClick={() => setPickDay(false)} className="f-body w-full mt-3 py-3 text-sm" style={{ color: C.dim }}>Отмена</button>
+        </Sheet>
+      )}
+
+      {creating && (
+        <EditWorkout
+          workout={creating}
+          workouts={workouts}
+          conditions={conditions}
+          isNew
+          onClose={() => setCreating(null)}
+          onSave={(w) => { onAdd(w); setCreating(null); }}
         />
       )}
     </div>
@@ -1601,6 +1699,12 @@ export default function App() {
   const finishSession = useCallback((w) => { setWorkouts((prev) => { const next = [w, ...prev]; saveKey("workouts", next); return next; }); setSession(null); setTab("journal"); }, [setSession]);
   const deleteWorkout = useCallback((id) => setWorkouts((prev) => { const next = prev.filter((w) => w.id !== id); saveKey("workouts", next); return next; }), []);
   /* правка записи: пустая тренировка после удаления всех упражнений исчезает из журнала */
+  /* запись задним числом: тренировка приходит уже готовой, без живой сессии */
+  const addWorkout = useCallback((w) => setWorkouts((prev) => {
+    const next = [w, ...prev];
+    saveKey("workouts", next);
+    return next;
+  }), []);
   const updateWorkout = useCallback((w) => setWorkouts((prev) => {
     const next = w.exercises.length ? prev.map((x) => (x.id === w.id ? w : x)) : prev.filter((x) => x.id !== w.id);
     saveKey("workouts", next);
@@ -1726,7 +1830,7 @@ export default function App() {
 
       <div className="flex-1 overflow-y-auto w-full max-w-xl mx-auto">
         {shownTab === "session" && <SessionTab session={session} setSession={setSession} workouts={workouts} days={days} onFinish={finishSession} goToDays={() => { setBaseView("days"); setTab("base"); }} conditions={conditions} restOverrides={restOverrides} setRestOverride={setRestOverride} muted={muted} />}
-        {shownTab === "journal" && <JournalTab workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} onUpdate={updateWorkout} />}
+        {shownTab === "journal" && <JournalTab workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} onUpdate={updateWorkout} onAdd={addWorkout} days={days} conditions={conditions} />}
         {shownTab === "progress" && <ProgressTab workouts={workouts} />}
         {shownTab === "base" && <BaseTab days={days} setDays={setDays} initialView={baseView} conditions={conditions} />}
         {shownTab === "body" && <BodyTab metrics={metrics} profile={profile} setProfile={setProfile} onAdd={addMetric} onDelete={deleteMetric} workouts={workouts} />}
