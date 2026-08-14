@@ -40,8 +40,8 @@ const Chip = ({ label, value, sub, accent }) => (
   </div>
 );
 const Sheet = ({ children, onClose }) => (
-  <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,.55)" }} onClick={onClose}>
-    <div className="w-full rounded-t-2xl p-4 max-h-[85vh] overflow-y-auto" style={{ background: C.surface }} onClick={(e) => e.stopPropagation()}>{children}</div>
+  <div className="fixed inset-0 z-50 flex items-end justify-center" style={{ background: "rgba(0,0,0,.55)" }} onClick={onClose}>
+    <div className="w-full max-w-xl rounded-t-2xl p-4 max-h-[85vh] overflow-y-auto" style={{ background: C.surface }} onClick={(e) => e.stopPropagation()}>{children}</div>
   </div>
 );
 const UniTag = () => (
@@ -1690,7 +1690,7 @@ export default function App() {
 
   return (
     <div className="h-dvh w-full flex flex-col" style={{ background: C.bg }}>
-      <div className="flex items-center justify-between px-4 pad-safe-top pb-1 shrink-0">
+      <div className="w-full max-w-xl mx-auto flex items-center justify-between px-4 pad-safe-top pb-1 shrink-0">
         <h1 className="f-display text-lg font-bold" style={{ color: C.chalk }}>Железный дневник</h1>
         <div className="flex items-center gap-3">
           {session && <button onClick={() => setTab("session")} className="f-body text-[10px] rounded-full px-2 py-0.5" style={{ background: session.paused ? C.mustard : C.red, color: C.chalk }}>{session.paused ? "пауза" : "идёт тренировка"}</button>}
@@ -1698,7 +1698,7 @@ export default function App() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto w-full max-w-xl mx-auto">
         {tab === "session" && <SessionTab session={session} setSession={setSession} workouts={workouts} days={days} onFinish={finishSession} goToDays={() => { setBaseView("days"); setTab("base"); }} conditions={conditions} restOverrides={restOverrides} setRestOverride={setRestOverride} muted={muted} />}
         {tab === "journal" && <JournalTab workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} onUpdate={updateWorkout} />}
         {tab === "progress" && <ProgressTab workouts={workouts} />}
@@ -1706,7 +1706,8 @@ export default function App() {
         {tab === "body" && <BodyTab metrics={metrics} profile={profile} setProfile={setProfile} onAdd={addMetric} onDelete={deleteMetric} workouts={workouts} />}
       </div>
 
-      <div className="flex shrink-0 pad-safe-bottom" style={{ background: C.surface, borderTop: `1px solid ${C.line}` }}>
+      <div className="shrink-0 pad-safe-bottom" style={{ background: C.surface, borderTop: `1px solid ${C.line}` }}>
+        <div className="w-full max-w-xl mx-auto flex">
         {tabs.map((t) => {
           const Icon = t.icon; const a = tab === t.id;
           return (
@@ -1716,6 +1717,7 @@ export default function App() {
             </button>
           );
         })}
+        </div>
       </div>
 
       {exportText !== null && (
