@@ -52,6 +52,12 @@ await page.waitForTimeout(1200);
 
 section("Загрузка и вкладки");
 ok((await page.title()) === "Железный дневник", "заголовок страницы");
+
+/* экран первого запуска с ограничениями */
+ok(await page.getByText("Это не медицина").isVisible(), "показан экран с ограничениями");
+await page.getByRole("button", { name: /Понятно, начать/ }).click();
+await page.waitForTimeout(700);
+ok(!(await page.getByText("Это не медицина").isVisible().catch(() => false)), "после принятия экран не мешает");
 for (const t of ["Сессия", "Журнал", "Графики", "База", "Тело"]) {
   await tab(t);
   ok(await page.getByRole("button", { name: t, exact: true }).isVisible(), `вкладка «${t}» открывается`);
@@ -171,6 +177,8 @@ const card = await page.locator("body").innerText();
 ok(/Не рекомендуется/i.test(card), "предупреждение в карточке упражнения");
 ok(/чем заменить/i.test(card), "показаны замены");
 ok(card.includes("Жим сведёнными гантелями сидя"), "замена осмысленная (нейтральный хват)");
+for (const part of ["Исходное положение", "Ход движения", "Ключевые точки", "Частые ошибки"])
+  ok(new RegExp(part, "i").test(card), `в карточке есть раздел «${part.toLowerCase()}»`);
 await page.getByText("Жим сведёнными гантелями сидя").first().click();
 await page.waitForTimeout(600);
 ok((await page.locator("body").innerText()).includes("← назад"), "переход по замене с возвратом");

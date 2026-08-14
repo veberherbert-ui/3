@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from "react";
-import { Plus, X, TrendingUp, BookOpen, Dumbbell, Flame, Settings, Trash2, Check, Info, Play, Timer, Calculator, Copy, ExternalLink, Activity, Pause, ChevronDown, ChevronUp, MoreHorizontal, Search, Library, Layers, Pencil, RotateCcw, Download, Upload, Share2, HardDrive, ShieldAlert, TriangleAlert, HeartPulse, Repeat2, Volume2, VolumeX } from "lucide-react";
+import { Plus, X, TrendingUp, BookOpen, Dumbbell, Flame, Settings, Trash2, Check, Info, Play, Timer, Calculator, Copy, ExternalLink, Activity, Pause, ChevronDown, ChevronUp, MoreHorizontal, Search, Library, Layers, Pencil, RotateCcw, Download, Upload, Share2, HardDrive, ShieldAlert, TriangleAlert, HeartPulse, Repeat2, Volume2, VolumeX, RefreshCw, FileText } from "lucide-react";
 
 import { EXDB, GROUPS, ALL_MUSCLES, PUSH_M, PULL_M, PRESETS, DEFAULT_DAYS, isUni, isBW } from "./data/exercises.js";
 import { CONDITIONS, CONDITION_BY_ID, helpfulNote } from "./data/conditions.js";
+import { TECHNIQUE } from "./data/technique.js";
 import { saferAlternatives, worstRisk, risksFor, dayWarnings } from "./lib/swap.js";
 import { C, plateColor } from "./lib/theme.js";
 import { today, daysAgo, fmtDate } from "./lib/dates.js";
@@ -17,6 +18,8 @@ import { shareOrDownload, readFileAsText, backupName } from "./lib/backup.js";
 import { restFor, fmtRest, stepRest } from "./lib/rest.js";
 import { primeAudio, playRestOver, scheduleRestOver, cancelScheduled, vibrate, releaseAudio, audioReady } from "./lib/sound.js";
 import { useWakeLock } from "./lib/wakelock.js";
+import { buildLabel, checkForUpdate, reloadOnUpdate } from "./lib/update.js";
+import DisclaimerGate, { DisclaimerBody } from "./Disclaimer.jsx";
 
 /* Графики грузятся отдельным куском: библиотека тяжёлая, а нужна только
    на двух вкладках из пяти. */
@@ -190,6 +193,72 @@ function ExercisePicker({ title, onPick, onClose, has, conditions = [] }) {
   );
 }
 
+/** Разбор техники: исходное положение, ход движения, ключевые точки, ошибки, дыхание. */
+function TechniqueBlock({ name, fallbackCue }) {
+  const t = TECHNIQUE[name];
+
+  /* своё упражнение или база ещё не дополнена — показываем короткую подсказку */
+  if (!t) {
+    return fallbackCue ? (
+      <div className="rounded-lg p-3 mb-3" style={{ background: C.surfaceHi, borderLeft: `3px solid ${C.mustard}` }}>
+        <div className="f-body text-[11px] uppercase tracking-wide mb-1" style={{ color: C.mustard }}>Ключ к технике</div>
+        <div className="f-body text-sm" style={{ color: C.chalk }}>{fallbackCue}</div>
+      </div>
+    ) : null;
+  }
+
+  const Step = ({ n, title, children }) => (
+    <div className="flex gap-2.5 mb-3">
+      <span className="f-num shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-semibold mt-0.5"
+        style={{ background: C.surface, color: C.dim, border: `1px solid ${C.line}` }}>{n}</span>
+      <div className="min-w-0">
+        <div className="f-body text-[11px] uppercase tracking-wide mb-0.5" style={{ color: C.dim }}>{title}</div>
+        <div className="f-body text-sm leading-relaxed" style={{ color: C.chalk }}>{children}</div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="mb-3">
+      <div className="rounded-lg p-3 mb-2" style={{ background: C.surfaceHi }}>
+        <Step n="1" title="Исходное положение">{t.setup}</Step>
+        <Step n="2" title="Ход движения">{t.exec}</Step>
+        <div className="flex gap-2.5">
+          <span className="shrink-0 w-5" />
+          <div className="f-body text-[11px] flex items-start gap-1.5" style={{ color: C.blue }}>
+            <Activity size={12} className="shrink-0 mt-0.5" />
+            <span>{t.breath}</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-lg p-3 mb-2" style={{ background: C.surfaceHi, borderLeft: `3px solid ${C.mustard}` }}>
+        <div className="f-body text-[11px] uppercase tracking-wide mb-1.5" style={{ color: C.mustard }}>Ключевые точки</div>
+        <ul className="space-y-1.5">
+          {t.cues.map((c) => (
+            <li key={c} className="f-body text-sm flex gap-2 leading-relaxed" style={{ color: C.chalk }}>
+              <span style={{ color: C.mustard }}>·</span>
+              <span>{c}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="rounded-lg p-3" style={{ background: C.surfaceHi, borderLeft: `3px solid ${C.red}` }}>
+        <div className="f-body text-[11px] uppercase tracking-wide mb-1.5" style={{ color: C.red }}>Частые ошибки</div>
+        <ul className="space-y-1.5">
+          {t.mistakes.map((c) => (
+            <li key={c} className="f-body text-sm flex gap-2 leading-relaxed" style={{ color: C.chalk }}>
+              <span style={{ color: C.red }}>×</span>
+              <span>{c}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
 function ExerciseInfo({ name, onClose, days, onAddToDay, conditions = [] }) {
   const [shown, setShown] = useState(name);
   useEffect(() => setShown(name), [name]);
@@ -212,10 +281,7 @@ function ExerciseInfo({ name, onClose, days, onAddToDay, conditions = [] }) {
         </div>
         <RiskPanel name={shown} conditions={conditions} onOpen={setShown} />
         <div className="f-body text-sm leading-relaxed mb-3" style={{ color: C.chalk }}>{info.d}</div>
-        <div className="rounded-lg p-3 mb-3" style={{ background: C.surfaceHi, borderLeft: `3px solid ${C.mustard}` }}>
-          <div className="f-body text-[11px] uppercase tracking-wide mb-1" style={{ color: C.mustard }}>Ключ к технике</div>
-          <div className="f-body text-sm" style={{ color: C.chalk }}>{info.cue}</div>
-        </div>
+        <TechniqueBlock name={shown} fallbackCue={info.cue} />
         {info.uni && <div className="f-body text-[11px] mb-3" style={{ color: C.blue }}>Одностороннее: записывай один подход — приложение считает обе стороны, тоннаж умножается на два.</div>}
       </>) : <div className="f-body text-sm mb-3" style={{ color: C.dim }}>Своё упражнение — описания пока нет.</div>}
 
@@ -1220,7 +1286,14 @@ function ConditionsCard({ profile, setProfile }) {
                   <span className="min-w-0">
                     <span className="f-body text-sm block" style={{ color: on ? C.chalk : C.dim }}>{c.name}</span>
                     <span className="f-body text-[10px] block" style={{ color: C.dim }}>{c.hint}</span>
-                    {on && <span className="f-body text-[11px] block mt-1.5" style={{ color: C.chalk }}>{c.guide}</span>}
+                    {on && (
+                      <>
+                        <span className="f-body text-[11px] block mt-1.5 leading-relaxed" style={{ color: C.chalk }}>{c.guide}</span>
+                        <span className="f-body text-[11px] block mt-2 leading-relaxed" style={{ color: C.red }}>
+                          Не в зал, а к врачу: {c.stop}
+                        </span>
+                      </>
+                    )}
                   </span>
                 </button>
               );
@@ -1467,6 +1540,9 @@ export default function App() {
   const [importError, setImportError] = useState(null);
   const [toast, setToast] = useState(null);
   const [storageInfo, setStorageInfo] = useState(null);
+  const [accepted, setAccepted] = useState(null); // null — ещё не прочитали из хранилища
+  const [showTerms, setShowTerms] = useState(false);
+  const [updating, setUpdating] = useState(false);
   const fileInput = useRef(null);
 
   useEffect(() => {
@@ -1477,6 +1553,7 @@ export default function App() {
       if (d && d.length) setDaysState(d); else { setDaysState(DEFAULT_DAYS); saveKey("days", DEFAULT_DAYS); }
       setSessionState(await loadKey("session"));
       const p = await loadKey("profile"); if (p) setProfileState(p);
+      setAccepted(!!(await loadKey("accepted")));
       setLoading(false);
       /* просим браузер закрепить хранилище, чтобы он не вычистил дневник при нехватке места */
       const persisted = await requestPersistence();
@@ -1600,6 +1677,9 @@ export default function App() {
 
   if (loading) return <div className="h-dvh w-full flex items-center justify-center" style={{ background: C.bg }}><Dumbbell className="animate-pulse" size={28} color={C.dim} /></div>;
 
+  /* до принятия условий приложение не показывается */
+  if (!accepted) return <DisclaimerGate onAccept={() => { setAccepted(true); saveKey("accepted", true); }} />;
+
   const tabs = [
     { id: "session", label: "Сессия", icon: Play },
     { id: "journal", label: "Журнал", icon: BookOpen },
@@ -1650,6 +1730,34 @@ export default function App() {
         </Sheet>
       )}
 
+      {showTerms && (
+        <Sheet onClose={() => setShowTerms(false)}>
+          <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>О приложении и ограничениях</div>
+          <div className="f-body text-xs mb-3" style={{ color: C.dim }}>Версия: {buildLabel()}</div>
+          <DisclaimerBody compact />
+          <button
+            onClick={async () => {
+              setUpdating(true);
+              const res = await checkForUpdate();
+              setUpdating(false);
+              if (res === "updated") say("Новая версия найдена — приложение перезапустится");
+              else if (res === "current") say("У тебя уже последняя версия");
+              else if (res === "offline") say("Нет сети — проверить не получится");
+              else say("Обновление доступно только в установленном приложении");
+            }}
+            disabled={updating}
+            className="f-body w-full mt-3 rounded-xl py-3 text-sm flex items-center justify-center gap-2"
+            style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
+            <RefreshCw size={15} className={updating ? "animate-spin" : ""} /> {updating ? "Проверяю…" : "Проверить обновление"}
+          </button>
+          <div className="f-body text-[11px] mt-2 leading-relaxed" style={{ color: C.dim }}>
+            Приложение обновляется само, но новая версия включается при следующем запуске.
+            На iPhone это значит закрыть его из переключателя задач, а не просто свернуть.
+          </div>
+          <button onClick={() => setShowTerms(false)} className="f-body w-full mt-3 py-3 text-sm" style={{ color: C.dim }}>Закрыть</button>
+        </Sheet>
+      )}
+
       {importText !== null && (
         <Sheet onClose={() => { setImportText(null); setImportError(null); }}>
           <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>Восстановить из копии</div>
@@ -1695,6 +1803,7 @@ export default function App() {
           <button onClick={saveBackupFile} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Share2 size={15} /> Сохранить копию файлом</button>
           <button onClick={async () => { try { await navigator.clipboard.writeText(backupJSON()); say("Копия в буфере обмена"); } catch { setShowSettings(false); setExportText(backupJSON()); } }} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Copy size={15} /> Скопировать копию текстом</button>
           <button onClick={openImport} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Upload size={15} /> Восстановить из копии</button>
+          <button onClick={() => { setShowSettings(false); setShowTerms(true); }} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><FileText size={15} /> О приложении и ограничениях</button>
           <div className="mb-2"><ConfirmButton onConfirm={() => { setDays(DEFAULT_DAYS); setShowSettings(false); say("Дни возвращены к исходным"); }} question="Свои дни будут заменены" className="f-body w-full rounded-xl py-3 text-sm flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><RotateCcw size={15} /> Сбросить дни к исходным</ConfirmButton></div>
           <ConfirmButton onConfirm={wipe} question="Стереть весь дневник?" className="f-body w-full rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.red, border: `1px solid ${C.line}` }}><Trash2 size={15} /> Удалить все записи</ConfirmButton>
           <button onClick={() => setShowSettings(false)} className="f-body w-full mt-2 py-3 text-sm" style={{ color: C.dim }}>Закрыть</button>

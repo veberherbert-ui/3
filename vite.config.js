@@ -9,8 +9,17 @@ import { VitePWA } from "vite-plugin-pwa";
    сборка запускается с BASE_PATH=/3/ — это прописано в .github/workflows. */
 const base = process.env.BASE_PATH || "/";
 
+/* Метка версии, чтобы в настройках было видно, что именно установлено.
+   Cloudflare Pages и GitHub Actions подставляют хеш коммита сами. */
+const commit = process.env.CF_PAGES_COMMIT_SHA || process.env.GITHUB_SHA || "";
+const buildId = commit ? commit.slice(0, 7) : "локальная";
+
 export default defineConfig({
   base,
+  define: {
+    __BUILD_ID__: JSON.stringify(buildId),
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+  },
   plugins: [
     react(),
     VitePWA({
