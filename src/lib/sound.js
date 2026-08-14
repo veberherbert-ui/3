@@ -163,6 +163,18 @@ export function vibrate() {
   }
 }
 
+/* Толчок на отметку подхода — короткий, не сигнал, а подтверждение нажатия.
+   В зале на экран смотрят урывками, и толчок в ладонь считывается вслепую.
+   Кто выключил анимации в системе, обычно не хочет и вибрации. */
+export function tapBuzz() {
+  try {
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    navigator.vibrate?.(12);
+  } catch {
+    /* то же самое: на iOS этого API нет */
+  }
+}
+
 /** Отпустить медиасессию: тренировка закончилась, держать её незачем. */
 export function releaseAudio() {
   cancelScheduled();

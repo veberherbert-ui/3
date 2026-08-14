@@ -30,7 +30,8 @@ const ok = (cond, label, extra = "") => {
 const section = (t) => console.log(`\n── ${t} ──`);
 
 const browser = await chromium.launch();
-const ctx = await browser.newContext({ ...devices["iPhone 13"], locale: "ru-RU", timezoneId: "Europe/Moscow" });
+const TZ = "Europe/Moscow";
+const ctx = await browser.newContext({ ...devices["iPhone 13"], locale: "ru-RU", timezoneId: TZ });
 const page = await ctx.newPage();
 
 const errors = [];
@@ -42,15 +43,20 @@ const dbRead = (key) => page.evaluate(async (k) => {
   return new Promise((r) => { const t = db.transaction("kv").objectStore("kv").get(k); t.onsuccess = () => r(t.result); });
 }, key);
 
+/* Дата считается в часовом поясе браузера, а не машины с тестом.
+   Иначе поздним вечером по Москве узел ещё во «вчера» по UTC, и проверка
+   «дата по умолчанию — вчера» падает на разнице в сутки. */
 const daysAgoISO = (n) => {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  const p = (x) => String(x).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  const d = new Date(Date.now() - n * 86400000);
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(d);
 };
 
+/* Нижняя панель — набор вкладок (role="tablist"), а не пять кнопок подряд:
+   диктору так понятно, что выбрано и сколько всего разделов. */
 const tab = async (name) => {
-  await page.getByRole("button", { name, exact: true }).click();
+  await page.getByRole("tab", { name, exact: true }).click();
   await page.waitForTimeout(500);
 };
 
@@ -67,8 +73,12 @@ await page.waitForTimeout(700);
 ok(!(await page.getByText("Это не медицина").isVisible().catch(() => false)), "после принятия экран не мешает");
 for (const t of ["Сессия", "Журнал", "Графики", "База", "Тело"]) {
   await tab(t);
-  ok(await page.getByRole("button", { name: t, exact: true }).isVisible(), `вкладка «${t}» открывается`);
+  const el = page.getByRole("tab", { name: t, exact: true });
+  ok(await el.isVisible(), `вкладка «${t}» открывается`);
+  ok((await el.getAttribute("aria-selected")) === "true", `вкладка «${t}» помечена выбранной`);
 }
+ok(await page.locator('[role="tablist"]').isVisible(), "панель вкладок объявлена как tablist");
+ok(await page.locator('[role="tabpanel"]').isVisible(), "содержимое объявлено как панель вкладки");
 
 section("Тренировка");
 await tab("Сессия");
@@ -270,13 +280,21 @@ const a11y = await page.evaluate(() => {
   document.querySelectorAll("*").forEach((el) => {
     if (!el.children.length && el.textContent.trim() && parseFloat(getComputedStyle(el).fontSize) < 13) tiny.push(1);
   });
-  const inputs = [...document.querySelectorAll("input")].map((el) => parseFloat(getComputedStyle(el).fontSize));
-  return { small, tiny: tiny.length, noLabel: noLabel.length, zoomy: inputs.filter((x) => x < 16).length };
+  const inputs = [...document.querySelectorAll("input, textarea, select")];
+  /* Подпись поля — своя, обёртка <label> или, на худой конец, подсказка
+     внутри: диктор должен назвать поле, а не сказать «текстовое поле». */
+  const bare = inputs.filter(
+    (el) => el.type !== "file" && !el.getAttribute("aria-label")
+      && !el.closest("label") && !el.getAttribute("placeholder"),
+  ).length;
+  const px = inputs.filter((el) => el.tagName === "INPUT").map((el) => parseFloat(getComputedStyle(el).fontSize));
+  return { small, tiny: tiny.length, noLabel: noLabel.length, bare, zoomy: px.filter((x) => x < 16).length };
 });
 ok(a11y.small.length === 0, "все кнопки не мельче 44px", a11y.small.slice(0, 3).join(", "));
 ok(a11y.tiny === 0, "нет текста мельче 13px", a11y.tiny ? `нашлось ${a11y.tiny}` : "");
 ok(a11y.noLabel === 0, "у всех кнопок есть подпись для диктора", a11y.noLabel ? `без подписи ${a11y.noLabel}` : "");
 ok(a11y.zoomy === 0, "поля ввода не вызывают автозум на iOS");
+ok(a11y.bare === 0, "у всех полей ввода есть подпись", a11y.bare ? `без подписи ${a11y.bare}` : "");
 
 section("Итог");
 ok(errors.length === 0, "ошибок в консоли нет", errors.slice(0, 3).join(" | "));

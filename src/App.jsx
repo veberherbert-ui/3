@@ -16,7 +16,7 @@ import {
 import { loadKey, saveKey, deleteKey, requestPersistence, storageEstimate } from "./lib/storage.js";
 import { shareOrDownload, readFileAsText, backupName } from "./lib/backup.js";
 import { restFor, fmtRest, stepRest } from "./lib/rest.js";
-import { primeAudio, playRestOver, scheduleRestOver, cancelScheduled, vibrate, releaseAudio, audioReady } from "./lib/sound.js";
+import { primeAudio, playRestOver, scheduleRestOver, cancelScheduled, vibrate, tapBuzz, releaseAudio, audioReady } from "./lib/sound.js";
 import { useWakeLock } from "./lib/wakelock.js";
 import { buildLabel, checkForUpdate, reloadOnUpdate } from "./lib/update.js";
 import { useAppearance, TEXT_SIZES } from "./lib/appearance.js";
@@ -41,8 +41,8 @@ const Chip = ({ label, value, sub, accent }) => (
   </div>
 );
 const Sheet = ({ children, onClose }) => (
-  <div className="fixed inset-0 z-50 flex items-end justify-center" style={{ background: "rgba(0,0,0,.55)" }} onClick={onClose}>
-    <div className="w-full max-w-xl rounded-t-2xl p-4 max-h-[85vh] overflow-y-auto" style={{ background: C.surface }} onClick={(e) => e.stopPropagation()}>{children}</div>
+  <div className="sheet-scrim fixed inset-0 z-50 flex items-end justify-center" style={{ background: "rgba(0,0,0,.55)" }} onClick={onClose}>
+    <div className="sheet-panel w-full max-w-xl rounded-t-2xl p-4 max-h-[85vh] overflow-y-auto" style={{ background: C.surface }} onClick={(e) => e.stopPropagation()}>{children}</div>
   </div>
 );
 const UniTag = () => (
@@ -132,8 +132,8 @@ function RiskPanel({ name, conditions, onOpen }) {
             {alts.map((a) => (
               <button key={a.name} onClick={() => onOpen?.(a.name)} className="w-full flex items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
                 <span className="min-w-0">
-                  <span className="f-body text-xs block" style={{ color: C.chalk }}>{a.name}</span>
-                  <span className="f-body text-2xs" style={{ color: C.dim }}>
+                  <span className="f-body text-sm block" style={{ color: C.chalk }}>{a.name}</span>
+                  <span className="f-body text-xs" style={{ color: C.dim }}>
                     {a.eq}
                     {!a.sameMuscle && ` · другая мышца: ${a.muscle}`}
                     {a.risk === 1 && " · тоже с осторожностью"}
@@ -167,7 +167,7 @@ function ExercisePicker({ title, onPick, onClose, has, conditions = [] }) {
       <div className="f-display text-base font-semibold mb-2" style={{ color: C.chalk }}>{title}</div>
       <div className="relative mb-3">
         <Search size={15} color={C.dim} className="absolute left-3 top-1/2 -translate-y-1/2" />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Поиск по названию или мышце…"
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Поиск по названию или мышце…" aria-label="Поиск упражнения"
           className="f-body w-full rounded-lg pl-9 pr-3 py-2.5 text-sm" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }} />
       </div>
       <div className="space-y-1">
@@ -205,54 +205,48 @@ function TechniqueBlock({ name, fallbackCue }) {
     ) : null;
   }
 
+  /* Разбор техники — самый длинный текст в приложении, и его читают.
+     Раньше он лежал в трёх вложенных карточках: лист → карточка → строка
+     с рамкой. Каждая рамка съедала ширину и добавляла шума — отсюда
+     жалоба на «пустые места». Коробок больше нет: разделы разделены
+     тонкой линией, роль каждого несёт заголовок и цвет, а освободившаяся
+     ширина ушла в размер текста. */
+
   const Step = ({ n, title, children }) => (
     <div className="flex gap-2.5 mb-3">
-      <span className="f-num shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-2xs font-semibold mt-0.5"
-        style={{ background: C.surface, color: C.dim, border: `1px solid ${C.line}` }}>{n}</span>
+      <span className="f-num shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-2xs font-semibold mt-1"
+        style={{ background: C.surfaceHi, color: C.dim }}>{n}</span>
       <div className="min-w-0">
         <div className="f-body text-xs uppercase tracking-wide mb-0.5" style={{ color: C.dim }}>{title}</div>
-        <div className="f-body text-sm leading-relaxed" style={{ color: C.chalk }}>{children}</div>
+        <div className="f-body text-base leading-relaxed" style={{ color: C.chalk }}>{children}</div>
       </div>
+    </div>
+  );
+
+  const List = ({ title, color, marker, items }) => (
+    <div className="pt-3 mt-3" style={{ borderTop: `1px solid ${C.line}` }}>
+      <div className="f-body text-xs uppercase tracking-wide mb-1.5" style={{ color }}>{title}</div>
+      <ul className="space-y-2">
+        {items.map((c) => (
+          <li key={c} className="f-body text-base flex gap-2 leading-relaxed" style={{ color: C.chalk }}>
+            <span className="shrink-0" aria-hidden="true" style={{ color }}>{marker}</span>
+            <span>{c}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 
   return (
     <div className="mb-3">
-      <div className="rounded-lg p-3 mb-2" style={{ background: C.surfaceHi }}>
-        <Step n="1" title="Исходное положение">{t.setup}</Step>
-        <Step n="2" title="Ход движения">{t.exec}</Step>
-        <div className="flex gap-2.5">
-          <span className="shrink-0 w-5" />
-          <div className="f-body text-xs flex items-start gap-1.5" style={{ color: C.blueText }}>
-            <Activity size={12} className="shrink-0 mt-0.5" />
-            <span>{t.breath}</span>
-          </div>
-        </div>
+      <Step n="1" title="Исходное положение">{t.setup}</Step>
+      <Step n="2" title="Ход движения">{t.exec}</Step>
+      <div className="f-body text-sm flex items-start gap-1.5 ml-7" style={{ color: C.blueText }}>
+        <Activity size={13} className="shrink-0 mt-1" />
+        <span>{t.breath}</span>
       </div>
-
-      <div className="rounded-lg p-3 mb-2" style={{ background: C.surfaceHi, borderLeft: `3px solid ${C.mustard}` }}>
-        <div className="f-body text-xs uppercase tracking-wide mb-1.5" style={{ color: C.mustard }}>Ключевые точки</div>
-        <ul className="space-y-1.5">
-          {t.cues.map((c) => (
-            <li key={c} className="f-body text-sm flex gap-2 leading-relaxed" style={{ color: C.chalk }}>
-              <span style={{ color: C.mustard }}>·</span>
-              <span>{c}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      <div className="rounded-lg p-3" style={{ background: C.surfaceHi, borderLeft: `3px solid ${C.red}` }}>
-        <div className="f-body text-xs uppercase tracking-wide mb-1.5" style={{ color: C.redText }}>Частые ошибки</div>
-        <ul className="space-y-1.5">
-          {t.mistakes.map((c) => (
-            <li key={c} className="f-body text-sm flex gap-2 leading-relaxed" style={{ color: C.chalk }}>
-              <span style={{ color: C.redText }}>×</span>
-              <span>{c}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
+      <List title="Ключевые точки" color={C.mustard} marker="·" items={t.cues} />
+      <List title="Частые ошибки" color={C.redText} marker="×" items={t.mistakes} />
     </div>
   );
 }
@@ -516,7 +510,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
           })}
         </div>
         <div className="flex gap-2 mt-3">
-          <input value={custom} onChange={(e) => setCustom(e.target.value)} placeholder="Разовое упражнение…" className="f-body flex-1 rounded-lg px-3 py-2 text-sm min-w-0" style={{ background: C.surface, color: C.chalk, border: `1px solid ${C.line}` }} />
+          <input value={custom} onChange={(e) => setCustom(e.target.value)} placeholder="Разовое упражнение…" aria-label="Название разового упражнения" className="f-body flex-1 rounded-lg px-3 py-2 text-sm min-w-0" style={{ background: C.surface, color: C.chalk, border: `1px solid ${C.line}` }} />
           <button onClick={() => { if (custom.trim()) { setPicked((p) => [...p, custom.trim()]); setCustom(""); } }} aria-label="Добавить разовое упражнение" className="rounded-lg px-3 flex items-center justify-center" style={{ background: C.surface, border: `1px solid ${C.line}`, color: C.chalk }}><Plus size={18} /></button>
         </div>
         <button onClick={() => start()} disabled={!picked.length} className="f-display w-full mt-5 rounded-xl py-3.5 text-base font-semibold flex items-center justify-center gap-2" style={{ background: picked.length ? C.red : C.surface, color: picked.length ? C.chalk : C.dim }}>
@@ -545,6 +539,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
   const markDone = (i, j) => {
     const ex = session.exercises[i];
     const s = ex.sets[j];
+    tapBuzz();
     if (!s.done && s.reps) {
       /* касание пользователя — единственный момент, когда iOS разрешает включить звук */
       primeAudio();
@@ -635,10 +630,10 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
                 {ex.sets.map((s, j) => (
                   <div key={j} className="flex items-center gap-2">
                     <span className="f-num text-xs w-3" style={{ color: C.dim }}>{j + 1}</span>
-                    <input type="number" inputMode="numeric" placeholder="повт" value={s.reps} onChange={(e) => upd(i, j, "reps", e.target.value)} className="f-num flex-1 rounded-lg px-2 py-1.5 text-sm text-center min-w-0" style={{ background: C.surfaceHi, color: s.done ? C.moss : C.chalk, border: `1px solid ${C.line}` }} />
+                    <input type="number" inputMode="numeric" placeholder="повт" aria-label={`${ex.name}, подход ${j + 1}: повторения`} value={s.reps} onChange={(e) => upd(i, j, "reps", e.target.value)} className="f-num flex-1 rounded-lg px-2 py-1.5 text-sm text-center min-w-0" style={{ background: C.surfaceHi, color: s.done ? C.moss : C.chalk, border: `1px solid ${C.line}` }} />
                     {!ex.bodyweight && (<>
-                      <span className="f-body text-xs" style={{ color: C.dim }}>×</span>
-                      <input type="number" inputMode="decimal" placeholder="кг" value={s.weight ?? ""} onChange={(e) => upd(i, j, "weight", e.target.value)} className="f-num flex-1 rounded-lg px-2 py-1.5 text-sm text-center min-w-0" style={{ background: C.surfaceHi, color: s.done ? C.moss : C.chalk, border: `1px solid ${C.line}` }} />
+                      <span className="f-body text-xs" aria-hidden="true" style={{ color: C.dim }}>×</span>
+                      <input type="number" inputMode="decimal" placeholder="кг" aria-label={`${ex.name}, подход ${j + 1}: вес в килограммах`} value={s.weight ?? ""} onChange={(e) => upd(i, j, "weight", e.target.value)} className="f-num flex-1 rounded-lg px-2 py-1.5 text-sm text-center min-w-0" style={{ background: C.surfaceHi, color: s.done ? C.moss : C.chalk, border: `1px solid ${C.line}` }} />
                     </>)}
                     <button onClick={() => markDone(i, j)} aria-label={`Подход ${j + 1}: ${s.done ? "снять отметку" : "выполнен"}`} aria-pressed={!!s.done} className="shrink-0 rounded-lg flex items-center justify-center" style={{ background: s.done ? C.moss : C.surfaceHi, border: `1px solid ${s.done ? C.moss : C.line}` }}>
                       <Check size={20} color={s.done ? C.chalk : C.dim} />
@@ -656,7 +651,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
         <Plus size={15} /> Добавить упражнение
       </button>
 
-      <textarea value={session.note} onChange={(e) => setSession((s) => ({ ...s, note: e.target.value }))} placeholder="Заметка: самочувствие, плечо, сон, что тянуло…" rows={2}
+      <textarea value={session.note} onChange={(e) => setSession((s) => ({ ...s, note: e.target.value }))} placeholder="Заметка: самочувствие, плечо, сон, что тянуло…" aria-label="Заметка к тренировке" rows={2}
         className="f-body w-full mt-3 rounded-xl px-3 py-2.5 text-sm resize-none" style={{ background: C.surface, color: C.chalk, border: `1px solid ${C.line}` }} />
       <button onClick={finish} className="f-display w-full mt-3 rounded-xl py-3.5 text-base font-semibold flex items-center justify-center gap-2" style={{ background: C.red, color: C.chalk }}><Check size={18} /> Завершить и сохранить</button>
 
@@ -702,7 +697,7 @@ function Catalog({ days, onAddToDay, conditions }) {
     <div>
       <div className="relative mb-3">
         <Search size={15} color={C.dim} className="absolute left-3 top-1/2 -translate-y-1/2" />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Поиск среди ${Object.keys(EXDB).length} упражнений…`}
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Поиск среди ${Object.keys(EXDB).length} упражнений…`} aria-label="Поиск по базе упражнений"
           className="f-body w-full rounded-lg pl-9 pr-3 py-2.5 text-sm" style={{ background: C.surface, color: C.chalk, border: `1px solid ${C.line}` }} />
       </div>
 
@@ -815,7 +810,7 @@ function DaysEditor({ days, setDays, conditions }) {
               </button>
               {o && (
                 <div className="px-3 pb-3">
-                  <input value={d.name} onChange={(e) => rename(d.id, e.target.value)} className="f-body w-full rounded-lg px-3 py-2 text-sm mb-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }} />
+                  <input value={d.name} onChange={(e) => rename(d.id, e.target.value)} aria-label="Название дня" className="f-body w-full rounded-lg px-3 py-2 text-sm mb-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }} />
                   <div className="space-y-1">
                     {d.exercises.map((n, i) => (
                       <div key={n} className="flex items-center gap-1 rounded-lg pl-2.5 py-1" style={{ background: C.surfaceHi }}>
@@ -979,16 +974,16 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
           <div key={i} className="rounded-xl p-3" style={{ background: C.surfaceHi, border: `1px solid ${C.line}` }}>
             <div className="flex items-start justify-between gap-2 mb-2">
               <div className="f-body text-sm min-w-0" style={{ color: C.chalk }}>{ex.name}{ex.uni && <UniTag />}</div>
-              <button onClick={() => rmExercise(i)} className="shrink-0"><Trash2 size={14} color={C.dim} /></button>
+              <button onClick={() => rmExercise(i)} aria-label={`Убрать «${ex.name}» из записи`} className="shrink-0 flex items-center justify-center"><Trash2 size={16} color={C.dim} /></button>
             </div>
             <div className="space-y-1.5">
               {ex.sets.map((s, j) => (
                 <div key={j} className="flex items-center gap-2">
                   <span className="f-num text-xs w-3" style={{ color: C.dim }}>{j + 1}</span>
-                  <input type="number" inputMode="numeric" value={s.reps ?? ""} onChange={(e) => updSet(i, j, "reps", e.target.value)} placeholder="повт" className="f-num flex-1 rounded-lg px-2 py-1.5 text-sm text-center min-w-0" style={inp} />
+                  <input type="number" inputMode="numeric" value={s.reps ?? ""} onChange={(e) => updSet(i, j, "reps", e.target.value)} placeholder="повт" aria-label={`${ex.name}, подход ${j + 1}: повторения`} className="f-num flex-1 rounded-lg px-2 py-1.5 text-sm text-center min-w-0" style={inp} />
                   {!ex.bodyweight && (<>
-                    <span className="f-body text-xs" style={{ color: C.dim }}>×</span>
-                    <input type="number" inputMode="decimal" value={s.weight ?? ""} onChange={(e) => updSet(i, j, "weight", e.target.value)} placeholder="кг" className="f-num flex-1 rounded-lg px-2 py-1.5 text-sm text-center min-w-0" style={inp} />
+                    <span className="f-body text-xs" aria-hidden="true" style={{ color: C.dim }}>×</span>
+                    <input type="number" inputMode="decimal" value={s.weight ?? ""} onChange={(e) => updSet(i, j, "weight", e.target.value)} placeholder="кг" aria-label={`${ex.name}, подход ${j + 1}: вес в килограммах`} className="f-num flex-1 rounded-lg px-2 py-1.5 text-sm text-center min-w-0" style={inp} />
                   </>)}
                   <button onClick={() => rmSet(i, j)} aria-label={`Удалить подход ${j + 1}`} className="shrink-0 rounded-lg flex items-center justify-center" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
                     <X size={14} color={C.dim} />
@@ -1011,7 +1006,7 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
         <Plus size={16} /> Добавить упражнение
       </button>
 
-      <textarea value={draft.note || ""} onChange={(e) => setField("note", e.target.value)} rows={2} placeholder="Заметка…"
+      <textarea value={draft.note || ""} onChange={(e) => setField("note", e.target.value)} rows={2} placeholder="Заметка…" aria-label="Заметка к тренировке"
         className="f-body w-full mt-3 rounded-xl px-3 py-2.5 text-sm resize-none" style={inp} />
 
       <button onClick={save} disabled={!draft.exercises.length}
@@ -1275,7 +1270,7 @@ function ProgressTab({ workouts }) {
       )}
 
       {view === "exercise" && (<>
-        <select value={sel} onChange={(e) => setSel(e.target.value)} className="f-body w-full rounded-lg px-3 py-2.5 text-sm" style={{ background: C.surface, color: C.chalk, border: `1px solid ${C.line}` }}>
+        <select value={sel} onChange={(e) => setSel(e.target.value)} aria-label="Упражнение для графика" className="f-body w-full rounded-lg px-3 py-2.5 text-sm" style={{ background: C.surface, color: C.chalk, border: `1px solid ${C.line}` }}>
           {names.map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
         <div className="flex gap-1.5 mt-2 overflow-x-auto pb-1">
@@ -1489,13 +1484,13 @@ function BodyTab({ metrics, profile, setProfile, onAdd, onDelete, workouts }) {
       <div className="rounded-xl p-3.5" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
         <div className="f-display text-sm font-semibold mb-2" style={{ color: C.chalk }}>Профиль</div>
         <div className="flex gap-2">
-          <input type="number" placeholder="рост, см" value={profile.height} onChange={(e) => setProfile({ ...profile, height: e.target.value })} className="f-num flex-1 rounded-lg px-2.5 py-2 text-sm min-w-0" style={inp} />
-          <input type="number" placeholder="возраст" value={profile.age} onChange={(e) => setProfile({ ...profile, age: e.target.value })} className="f-num flex-1 rounded-lg px-2.5 py-2 text-sm min-w-0" style={inp} />
+          <input type="number" placeholder="рост, см" aria-label="Рост в сантиметрах" value={profile.height} onChange={(e) => setProfile({ ...profile, height: e.target.value })} className="f-num flex-1 rounded-lg px-2.5 py-2 text-sm min-w-0" style={inp} />
+          <input type="number" placeholder="возраст" aria-label="Возраст, лет" value={profile.age} onChange={(e) => setProfile({ ...profile, age: e.target.value })} className="f-num flex-1 rounded-lg px-2.5 py-2 text-sm min-w-0" style={inp} />
           <div className="flex rounded-lg overflow-hidden shrink-0" style={{ border: `1px solid ${C.line}` }}>
             {[["m", "М"], ["f", "Ж"]].map(([v, l]) => <button key={v} onClick={() => setProfile({ ...profile, sex: v })} className="f-body text-xs px-3" style={{ background: profile.sex === v ? C.red : C.surfaceHi, color: profile.sex === v ? C.chalk : C.dim }}>{l}</button>)}
           </div>
         </div>
-        <select value={profile.activity} onChange={(e) => setProfile({ ...profile, activity: e.target.value })} className="f-body w-full rounded-lg px-3 py-2 text-sm mt-2" style={inp}>
+        <select value={profile.activity} onChange={(e) => setProfile({ ...profile, activity: e.target.value })} aria-label="Повседневная активность" className="f-body w-full rounded-lg px-3 py-2 text-sm mt-2" style={inp}>
           <option value="1.2">Сидячий образ жизни</option>
           <option value="1.375">Лёгкая активность (1–3 трен/нед)</option>
           <option value="1.55">Средняя (3–5 трен/нед)</option>
@@ -1564,8 +1559,8 @@ function BodyTab({ metrics, profile, setProfile, onAdd, onDelete, workouts }) {
       <div className="rounded-xl p-3.5" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
         <div className="f-display text-sm font-semibold mb-2 flex items-center gap-2" style={{ color: C.chalk }}><Calculator size={15} /> Одноповторный максимум</div>
         <div className="flex gap-2">
-          <input type="number" inputMode="decimal" placeholder="вес, кг" value={w1} onChange={(e) => setW1(e.target.value)} className="f-num flex-1 rounded-lg px-3 py-2 text-sm min-w-0" style={inp} />
-          <input type="number" inputMode="numeric" placeholder="повт" value={r1v} onChange={(e) => setR1v(e.target.value)} className="f-num flex-1 rounded-lg px-3 py-2 text-sm min-w-0" style={inp} />
+          <input type="number" inputMode="decimal" placeholder="вес, кг" aria-label="Вес в килограммах" value={w1} onChange={(e) => setW1(e.target.value)} className="f-num flex-1 rounded-lg px-3 py-2 text-sm min-w-0" style={inp} />
+          <input type="number" inputMode="numeric" placeholder="повт" aria-label="Число повторений" value={r1v} onChange={(e) => setR1v(e.target.value)} className="f-num flex-1 rounded-lg px-3 py-2 text-sm min-w-0" style={inp} />
         </div>
         {oneRM && (<>
           <div className="flex items-baseline gap-2 mt-3">
@@ -1597,8 +1592,8 @@ function BodyTab({ metrics, profile, setProfile, onAdd, onDelete, workouts }) {
         {bodyW > 0 && (<>
           <div className="f-body text-xs uppercase tracking-wide mt-4 mb-2" style={{ color: C.dim }}>Расход за тренировку</div>
           <div className="flex gap-2">
-            <input type="number" placeholder="мин" value={dur} onChange={(e) => setDur(e.target.value)} className="f-num w-20 rounded-lg px-2 py-2 text-sm shrink-0" style={inp} />
-            <select value={intensity} onChange={(e) => setIntensity(e.target.value)} className="f-body flex-1 rounded-lg px-2 py-2 text-sm min-w-0" style={inp}>
+            <input type="number" placeholder="мин" aria-label="Длительность тренировки в минутах" value={dur} onChange={(e) => setDur(e.target.value)} className="f-num w-20 rounded-lg px-2 py-2 text-sm shrink-0" style={inp} />
+            <select value={intensity} onChange={(e) => setIntensity(e.target.value)} aria-label="Плотность тренировки" className="f-body flex-1 rounded-lg px-2 py-2 text-sm min-w-0" style={inp}>
               <option value="light">Спокойно, длинный отдых</option>
               <option value="moderate">Обычно, отдых 90 сек</option>
               <option value="hard">Плотно, суперсеты</option>
@@ -1619,7 +1614,7 @@ function BodyTab({ metrics, profile, setProfile, onAdd, onDelete, workouts }) {
         <Sheet onClose={() => setShowForm(false)}>
           <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>Новый замер</div>
           <div className="f-body text-xs mb-3" style={{ color: C.dim }}>Обязателен только вес. Чем больше заполнишь — тем точнее расчёты.</div>
-          <input type="date" value={form.date || today()} onChange={(e) => setForm({ ...form, date: e.target.value })} className="f-num w-full rounded-lg px-3 py-2 text-sm mb-3" style={inp} />
+          <input type="date" value={form.date || today()} onChange={(e) => setForm({ ...form, date: e.target.value })} aria-label="Дата замера" className="f-num w-full rounded-lg px-3 py-2 text-sm mb-3" style={inp} />
           <div className="space-y-2">
             {MEASURES.map((mm) => (
               <div key={mm.k} className="flex items-center gap-2">
@@ -1627,7 +1622,7 @@ function BodyTab({ metrics, profile, setProfile, onAdd, onDelete, workouts }) {
                   <div className="f-body text-sm" style={{ color: mm.req ? C.chalk : C.dim }}>{mm.l}{mm.req && <span style={{ color: C.redText }}> *</span>}</div>
                   {mm.hint && <div className="f-body text-2xs" style={{ color: C.dim }}>{mm.hint}</div>}
                 </div>
-                <input type="number" inputMode="decimal" placeholder={mm.u} value={form[mm.k] ?? ""} onChange={(e) => setForm({ ...form, [mm.k]: e.target.value })} className="f-num w-24 rounded-lg px-2 py-2 text-sm text-center shrink-0" style={inp} />
+                <input type="number" inputMode="decimal" placeholder={mm.u} aria-label={`${mm.l}, ${mm.u}`} value={form[mm.k] ?? ""} onChange={(e) => setForm({ ...form, [mm.k]: e.target.value })} className="f-num w-24 rounded-lg px-2 py-2 text-sm text-center shrink-0" style={inp} />
               </div>
             ))}
           </div>
@@ -1648,6 +1643,11 @@ export default function App() {
      попадало в один коммит: на 0.1–0.2 с экран замирал со старой вкладкой,
      и это читалось как «мелькнула предыдущая». */
   const shownTab = useDeferredValue(tab);
+  /* Прокрутка одна на все вкладки: без сброса переход в «Базу» из середины
+     длинного журнала открывался с середины базы. Каждый раздел начинается
+     сверху — так же, как если бы его открыли впервые. */
+  const scroller = useRef(null);
+  useEffect(() => { scroller.current?.scrollTo(0, 0); }, [shownTab]);
   const [baseView, setBaseView] = useState(null);
   const [workouts, setWorkouts] = useState([]);
   const [metrics, setMetrics] = useState([]);
@@ -1828,20 +1828,25 @@ export default function App() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto w-full max-w-xl mx-auto">
+      <div ref={scroller} className="flex-1 overflow-y-auto w-full max-w-xl mx-auto" role="tabpanel" id="tabpanel" aria-labelledby={`tab-${shownTab}`}>
+        <div key={shownTab} className="tab-in">
         {shownTab === "session" && <SessionTab session={session} setSession={setSession} workouts={workouts} days={days} onFinish={finishSession} goToDays={() => { setBaseView("days"); setTab("base"); }} conditions={conditions} restOverrides={restOverrides} setRestOverride={setRestOverride} muted={muted} />}
         {shownTab === "journal" && <JournalTab workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} onUpdate={updateWorkout} onAdd={addWorkout} days={days} conditions={conditions} />}
         {shownTab === "progress" && <ProgressTab workouts={workouts} />}
         {shownTab === "base" && <BaseTab days={days} setDays={setDays} initialView={baseView} conditions={conditions} />}
         {shownTab === "body" && <BodyTab metrics={metrics} profile={profile} setProfile={setProfile} onAdd={addMetric} onDelete={deleteMetric} workouts={workouts} />}
+        </div>
       </div>
 
       <div className="shrink-0 pad-safe-bottom" style={{ background: C.surface, borderTop: `1px solid ${C.line}` }}>
-        <div className="w-full max-w-xl mx-auto flex">
+        {/* Диктор должен объявлять это набором вкладок, а не пятью кнопками
+            подряд, — иначе непонятно, что выбрано и сколько всего разделов. */}
+        <div className="w-full max-w-xl mx-auto flex" role="tablist" aria-label="Разделы">
         {tabs.map((t) => {
           const Icon = t.icon; const a = tab === t.id;
           return (
-            <button key={t.id} onClick={() => { setTab(t.id); if (t.id === "base") setBaseView(null); }} className="flex-1 flex flex-col items-center gap-0.5 py-2">
+            <button key={t.id} id={`tab-${t.id}`} role="tab" aria-selected={a} aria-controls="tabpanel"
+              onClick={() => { setTab(t.id); if (t.id === "base") setBaseView(null); }} className="flex-1 flex flex-col items-center gap-0.5 py-2">
               <Icon size={17} color={a ? C.red : C.dim} />
               <span className="f-body text-2xs" style={{ color: a ? C.chalk : C.dim }}>{t.label}</span>
             </button>
@@ -1854,7 +1859,7 @@ export default function App() {
         <Sheet onClose={() => setExportText(null)}>
           <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>Выгрузка дневника</div>
           <div className="f-body text-xs mb-3" style={{ color: C.dim }}>Весь дневник обычным текстом: тренировки, подходы, замеры. Годится, чтобы отправить тренеру или разобрать самому.</div>
-          <textarea readOnly value={exportText} rows={10} onFocus={(e) => e.target.select()} className="f-num w-full rounded-lg p-2.5 text-2xs leading-snug" style={{ background: C.bg, color: C.chalk, border: `1px solid ${C.line}` }} />
+          <textarea readOnly value={exportText} rows={10} aria-label="Дневник обычным текстом" onFocus={(e) => e.target.select()} className="f-num w-full rounded-lg p-2.5 text-2xs leading-snug" style={{ background: C.bg, color: C.chalk, border: `1px solid ${C.line}` }} />
           <button onClick={async () => { try { await navigator.clipboard.writeText(exportText); setCopied(true); } catch { setCopied(false); } }} className="f-body w-full mt-2 rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-2" style={{ background: copied ? C.moss : C.red, color: C.chalk }}>
             {copied ? <><Check size={15} /> Скопировано</> : <><Copy size={15} /> Скопировать</>}
           </button>
@@ -1898,7 +1903,7 @@ export default function App() {
             <Upload size={15} /> Выбрать файл копии
           </button>
           <div className="f-body text-xs mb-2" style={{ color: C.dim }}>Или вставить текстом:</div>
-          <textarea value={importText} onChange={(e) => { setImportText(e.target.value); setImportError(null); }} rows={5} placeholder="Вставь сюда резервную копию…" className="f-num w-full rounded-lg p-2.5 text-2xs" style={{ background: C.bg, color: C.chalk, border: `1px solid ${C.line}` }} />
+          <textarea value={importText} onChange={(e) => { setImportText(e.target.value); setImportError(null); }} rows={5} placeholder="Вставь сюда резервную копию…" aria-label="Текст резервной копии" className="f-num w-full rounded-lg p-2.5 text-2xs" style={{ background: C.bg, color: C.chalk, border: `1px solid ${C.line}` }} />
           {importError && <div className="f-body text-xs mt-2" style={{ color: C.redText }}>{importError}</div>}
           <button onClick={() => doImport(importText)} disabled={!importText.trim()} className="f-body w-full mt-2 rounded-xl py-3 text-sm font-medium" style={{ background: importText.trim() ? C.surfaceHi : C.surface, color: importText.trim() ? C.chalk : C.dim, border: `1px solid ${C.line}` }}>Восстановить из текста</button>
           <button onClick={() => { setImportText(null); setImportError(null); }} className="f-body w-full mt-1 py-3 text-sm" style={{ color: C.dim }}>Отмена</button>

@@ -119,6 +119,57 @@ button:not(.tap-inline),
   border-radius: 6px;
 }
 
+/* Отклик на нажатие.
+
+   Подсветка нажатия убрана глобально (-webkit-tap-highlight-color), а в зале
+   на экран смотрят урывками — без ответа непонятно, засчиталось нажатие или
+   палец соскользнул. Короткое сжатие даёт физическое ощущение кнопки.
+   Держим его быстрым: это подтверждение, а не эффект. */
+button:not(:disabled):active,
+[role="button"]:active {
+  transform: scale(0.96);
+}
+button,
+[role="button"] {
+  transition: transform 100ms ease-out;
+}
+
+/* Всплывающие листы. Появлялись мгновенно — читалось как сбой отрисовки. */
+@keyframes scrim-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes sheet-up {
+  from {
+    transform: translateY(12%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+/* Проявление вкладки — без сдвигов вбок: от них части людей дурно. */
+@keyframes tab-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.sheet-scrim {
+  animation: scrim-in 160ms ease-out;
+}
+.sheet-panel {
+  animation: sheet-up 200ms cubic-bezier(0.22, 0.68, 0.35, 1);
+}
+.tab-in {
+  animation: tab-in 140ms ease-out;
+}
+
 input[type="date"]::-webkit-calendar-picker-indicator {
   filter: invert(0.7);
 }
@@ -148,5 +199,10 @@ input[type="number"] {
   * {
     transition: none !important;
     animation: none !important;
+  }
+  /* без перехода сжатие превращается в рывок — убираем и его */
+  button:not(:disabled):active,
+  [role="button"]:active {
+    transform: none;
   }
 }
