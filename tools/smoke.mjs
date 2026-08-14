@@ -77,7 +77,7 @@ ok(rests.length > 1 && new Set(rests).size > 1, "время отдыха раз�
 
 await page.getByPlaceholder("повт").first().fill("10");
 await page.getByPlaceholder("кг").first().fill("40");
-await page.locator("button.w-8.h-8").first().click();
+await page.getByRole("button", { name: /^Подход 1/ }).first().click();
 await page.waitForTimeout(1000);
 
 const restBig = await page.locator(".f-num.text-4xl").first().textContent().catch(() => null);
@@ -153,7 +153,7 @@ await page.getByRole("button", { name: "Готово" }).click();
 await page.waitForTimeout(600);
 const after = await page.locator("button:has-text('+ подход')").count();
 ok(after === before + 1, "упражнение добавилось в идущую тренировку", `${before} → ${after}`);
-await page.locator("button:has(svg.lucide-ellipsis)").first().click();
+await page.locator('button[aria-label="Ещё действия"]').first().click();
 await page.waitForTimeout(500);
 await page.getByRole("button", { name: /Прервать без сохранения/ }).click();
 await page.waitForTimeout(400);
@@ -186,7 +186,7 @@ await page.getByRole("button", { name: "Закрыть" }).click();
 await page.waitForTimeout(400);
 
 section("Резервная копия");
-await page.locator("button:has(svg.lucide-settings)").click();
+await page.locator('button[aria-label="Настройки"]').click();
 await page.waitForTimeout(500);
 const backup = JSON.stringify({ v: 1, workouts: await dbRead("workouts"), metrics: [], days: await dbRead("days"), profile: await dbRead("profile") });
 await page.getByRole("button", { name: "Восстановить из копии" }).click();
@@ -227,6 +227,26 @@ await page.getByRole("button", { name: /Завершить и сохранить
 await page.waitForTimeout(1200);
 ok((await dbRead("workouts"))?.length === 2, "новая тренировка записывается без сети");
 await ctx.setOffline(false);
+
+section("Читаемость и доступность");
+const a11y = await page.evaluate(() => {
+  const small = [], tiny = [], noLabel = [];
+  document.querySelectorAll("button").forEach((el) => {
+    const b = el.getBoundingClientRect();
+    if (b.width > 0 && !el.classList.contains("tap-inline") && (b.width < 44 || b.height < 44))
+      small.push(`${(el.innerText || el.ariaLabel || "иконка").trim().slice(0, 20)} ${Math.round(b.width)}×${Math.round(b.height)}`);
+    if (!el.innerText.trim() && !el.getAttribute("aria-label")) noLabel.push(1);
+  });
+  document.querySelectorAll("*").forEach((el) => {
+    if (!el.children.length && el.textContent.trim() && parseFloat(getComputedStyle(el).fontSize) < 13) tiny.push(1);
+  });
+  const inputs = [...document.querySelectorAll("input")].map((el) => parseFloat(getComputedStyle(el).fontSize));
+  return { small, tiny: tiny.length, noLabel: noLabel.length, zoomy: inputs.filter((x) => x < 16).length };
+});
+ok(a11y.small.length === 0, "все кнопки не мельче 44px", a11y.small.slice(0, 3).join(", "));
+ok(a11y.tiny === 0, "нет текста мельче 13px", a11y.tiny ? `нашлось ${a11y.tiny}` : "");
+ok(a11y.noLabel === 0, "у всех кнопок есть подпись для диктора", a11y.noLabel ? `без подписи ${a11y.noLabel}` : "");
+ok(a11y.zoomy === 0, "поля ввода не вызывают автозум на iOS");
 
 section("Итог");
 ok(errors.length === 0, "ошибок в консоли нет", errors.slice(0, 3).join(" | "));

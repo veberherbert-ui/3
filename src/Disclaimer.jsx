@@ -11,7 +11,7 @@ import { C } from "./lib/theme.js";
 const POINTS = [
   {
     icon: HeartPulse,
-    color: C.red,
+    color: C.redText,
     title: "Это не медицина",
     text:
       "Пометки о травмах и ограничениях — обобщённые ориентиры по механике движений, а не диагноз и не назначение. Приложение не знает вашего состояния и не может его оценить. При боли, свежей травме, беременности, проблемах с сердцем или давлением сначала врач, потом зал.",
@@ -25,14 +25,14 @@ const POINTS = [
   },
   {
     icon: Calculator,
-    color: C.blue,
+    color: C.blueText,
     title: "Расчёты приблизительные",
     text:
       "Процент жира по обхватам, одноповторный максимум, расход калорий — оценки по формулам, с погрешностью в десятки процентов. Они полезны, чтобы видеть динамику, и бесполезны как точные числа. Идти проверять расчётный максимум на практике — плохая идея.",
   },
   {
     icon: HardDrive,
-    color: C.moss,
+    color: C.mossText,
     title: "Данные только у вас",
     text:
       "Дневник хранится на самом устройстве и никуда не отправляется — ни на сервер, ни в облако. Обратная сторона: удалите приложение — исчезнут и записи. Делайте копию файлом хотя бы раз в месяц, это в настройках.",
@@ -69,7 +69,7 @@ export default function DisclaimerGate({ onAccept }) {
         <button onClick={onAccept} className="f-display w-full mt-5 rounded-xl py-3.5 text-base font-semibold" style={{ background: C.red, color: C.chalk }}>
           Понятно, начать
         </button>
-        <p className="f-body text-[11px] text-center mt-3 pad-safe-bottom" style={{ color: C.dim }}>
+        <p className="f-body text-xs text-center mt-3 pad-safe-bottom" style={{ color: C.dim }}>
           Этот текст всегда доступен в настройках.
         </p>
       </div>

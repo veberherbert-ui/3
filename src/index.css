@@ -18,6 +18,28 @@
   /* высота полосы жестов внизу iPhone и «чёлки» сверху */
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+
+  /* Множитель размера текста. Меняется настройкой в приложении.
+     Проценты, а не пиксели: так сохраняется системная настройка
+     крупного шрифта — мы её умножаем, а не затираем. */
+  --text-scale: 1;
+
+  /* минимальная сторона кнопки: 44 — требование Apple, 48 — Google */
+  --tap: 44px;
+}
+
+html[data-text="large"] {
+  --text-scale: 1.15;
+}
+html[data-text="xlarge"] {
+  --text-scale: 1.3;
+}
+html[data-tap="large"] {
+  --tap: 52px;
+}
+
+html {
+  font-size: calc(100% * var(--text-scale));
 }
 
 html,
@@ -63,10 +85,38 @@ input,
 textarea,
 select,
 button {
-  font-size: 16px; /* меньше 16px — iOS зумит страницу при фокусе */
   border-radius: 0;
   -webkit-appearance: none;
   appearance: none;
+}
+
+/* iOS увеличивает страницу при фокусе, если шрифт в поле меньше 16px.
+   Правило по элементу слабее классов Tailwind, поэтому !important —
+   иначе text-sm на поле вернёт 15px и автозум вернётся вместе с ним. */
+input,
+textarea,
+select {
+  font-size: max(16px, 1rem) !important;
+}
+
+/* Кнопки и всё нажимаемое — не мельче минимальной цели.
+   Исключение только для того, что лежит внутри строки текста. */
+button:not(.tap-inline),
+[role="button"]:not(.tap-inline) {
+  min-height: var(--tap);
+  min-width: var(--tap);
+}
+/* кнопки-ссылки внутри текста не должны раздвигать строку */
+.tap-inline {
+  min-height: 0;
+  min-width: 0;
+}
+
+/* видимая обводка фокуса — без неё клавиатурой пользоваться нельзя */
+:focus-visible {
+  outline: 2px solid #7696ac;
+  outline-offset: 2px;
+  border-radius: 6px;
 }
 
 input[type="date"]::-webkit-calendar-picker-indicator {
