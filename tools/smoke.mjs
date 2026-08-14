@@ -71,6 +71,18 @@ ok(await page.getByText("Это не медицина").isVisible(), "показ
 await page.getByRole("button", { name: /Понятно, начать/ }).click();
 await page.waitForTimeout(700);
 ok(!(await page.getByText("Это не медицина").isVisible().catch(() => false)), "после принятия экран не мешает");
+
+/* Знакомство: без роста, веса и возраста половина расчётов пустая,
+   поэтому их спрашивают сразу, а не прячут во вкладку «Тело». */
+ok(await page.getByText("Пара чисел о вас").isVisible(), "после условий спрашивают рост, вес, возраст");
+await page.getByRole("spinbutton", { name: "Рост, см" }).fill("180");
+await page.getByRole("spinbutton", { name: "Вес, кг" }).fill("82");
+await page.getByRole("spinbutton", { name: "Возраст, лет" }).fill("35");
+await page.getByRole("button", { name: /Сохранить и начать/ }).click();
+await page.waitForTimeout(800);
+ok(!(await page.getByText("Пара чисел о вас").isVisible().catch(() => false)), "знакомство показывается один раз");
+ok((await dbRead("profile"))?.height === "180", "рост сохранён в профиль");
+ok(+(await dbRead("metrics"))?.[0]?.weight === 82, "вес лёг первым замером");
 for (const t of ["Сессия", "Журнал", "Графики", "База", "Тело"]) {
   await tab(t);
   const el = page.getByRole("tab", { name: t, exact: true });
@@ -191,24 +203,27 @@ const past = def.slice(0, 8) + "05";
 await dateField.fill(past);
 await page.getByPlaceholder("повт").first().fill("8");
 await page.getByPlaceholder("кг").first().fill("70");
+/* Подтягивания заодно: проверим, что свой вес попадает в тоннаж. */
+await page.getByRole("spinbutton", { name: /Подтягивания \(обычный хват\), подход 1/ }).fill("8");
 await page.getByRole("button", { name: /Записать в журнал/ }).click();
 await page.waitForTimeout(1100);
 const list = await dbRead("workouts");
 const added = list?.find((w) => w.date === past);
 ok(!!added, "тренировка записана прошедшей датой", past);
-ok(added?.exercises?.length === 1, "пустые упражнения отброшены");
+ok(added?.exercises?.length === 2, "пустые упражнения отброшены");
 ok(list?.length === 2, "прежняя запись на месте");
+
+/* Раньше упражнения со своим весом давали ноль: четыре подхода подтягиваний
+   просто исчезали из статистики. Теперь считаются по доле веса тела. */
+const bwCard = page.locator("div.rounded-xl").filter({ hasText: "Спина + Задняя дельта" }).first();
+const bwTons = +((await bwCard.innerText()).match(/([\d\s\u00a0\u202f]+)\s*кг/)?.[1] || "0").replace(/[^\d]/g, "");
+ok(bwTons > 560, "подтягивания попадают в тоннаж", `${bwTons} кг против 560 без своего веса`);
+await bwCard.getByText("Спина + Задняя дельта").click();
+await page.waitForTimeout(400);
+ok((await bwCard.innerText()).includes("своим весом"), "видно, во что оценён повтор своим весом");
 
 section("Расход за тренировку");
 await tab("Тело");
-await page.getByRole("button", { name: /Новый замер/ }).click();
-await page.waitForTimeout(600);
-await page.getByRole("spinbutton", { name: "Вес, кг" }).fill("82");
-await page.getByRole("button", { name: /Сохранить замер/ }).click();
-await page.waitForTimeout(900);
-await page.getByRole("spinbutton", { name: "Рост в сантиметрах" }).fill("180");
-await page.getByRole("spinbutton", { name: "Возраст, лет" }).fill("35");
-await page.waitForTimeout(700);
 const picker = page.getByRole("combobox", { name: "Тренировка для расчёта расхода" });
 await picker.scrollIntoViewIfNeeded();
 ok(await picker.isVisible(), "расход считается по выбранной тренировке из журнала");

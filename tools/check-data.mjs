@@ -21,7 +21,7 @@ try {
   process.exit(1);
 }
 
-const { DB_ROWS, EXDB, PRESETS, DEFAULT_DAYS } = exercises;
+const { DB_ROWS, EXDB, PRESETS, DEFAULT_DAYS, BW_SHARE, BW_STATIC } = exercises;
 const { CONDITIONS, RISKS, PREFERRED_SWAPS, HELPFUL } = conditions;
 const { TECHNIQUE } = technique;
 
@@ -88,6 +88,22 @@ known.forEach((n) => {
 Object.keys(TECHNIQUE).forEach((n) => checkRef(n, "техника"));
 
 /* ---- итог ---- */
+/* ---- упражнения со своим весом ---- */
+/* Без доли веса тела такое упражнение молча даёт нулевой тоннаж — самая
+   незаметная поломка из возможных: цифры есть, просто неправильные. */
+Object.entries(EXDB).forEach(([name, info]) => {
+  if (!info.bw) return;
+  const share = BW_SHARE[name];
+  if (share == null && !BW_STATIC.has(name))
+    fail("свой вес", `у «${name}» нет доли веса тела — добавь в BW_SHARE или в BW_STATIC, если это статика`);
+  if (share != null && (share <= 0.15 || share > 1))
+    fail("свой вес", `доля веса тела у «${name}» — ${share}; ожидается от 0,2 до 1`);
+});
+Object.keys(BW_SHARE).forEach((name) => {
+  if (!EXDB[name]) fail("свой вес", `«${name}» есть в BW_SHARE, но нет в базе — опечатка в названии?`);
+  else if (!EXDB[name].bw) fail("свой вес", `«${name}» помечено долей веса тела, но выполняется не своим весом`);
+});
+
 if (problems.length) {
   console.error(`\n✗ Найдено проблем: ${problems.length}\n`);
   problems.slice(0, 40).forEach((p) => console.error(`  • ${p.where}: ${p.what}`));
@@ -98,5 +114,6 @@ if (problems.length) {
 
 console.log(
   `✓ Данные в порядке: ${DB_ROWS.length} упражнений, ${CONDITIONS.length} состояний, ` +
-    `${Object.keys(RISKS).length} с метками травм, техника у всех.`
+    `${Object.keys(RISKS).length} с метками травм, техника у всех, ` +
+    `${Object.keys(BW_SHARE).length} со своим весом в тоннаже.`
 );

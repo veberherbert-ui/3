@@ -47,7 +47,9 @@ export function DisclaimerBody({ compact }) {
           <div className="f-display text-sm font-semibold flex items-center gap-1.5 mb-1" style={{ color }}>
             <Icon size={14} /> {title}
           </div>
-          <div className="f-body leading-relaxed" style={{ color: C.chalk, fontSize: compact ? 12 : 13 }}>{text}</div>
+          {/* 13px — нижняя граница читаемого, ниже опускаться нельзя даже
+              в компактном виде: см. docs/interface.md */}
+          <div className={`f-body leading-relaxed ${compact ? "text-2xs" : "text-xs"}`} style={{ color: C.chalk }}>{text}</div>
         </div>
       ))}
     </div>

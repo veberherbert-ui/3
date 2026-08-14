@@ -9,7 +9,7 @@ import { C, plateColor } from "./lib/theme.js";
 import { today, daysAgo, fmtDate } from "./lib/dates.js";
 import {
   uid, r1, ytLink,
-  exTonnage, workoutTonnage, topWeight, topReps, totalReps,
+  exTonnage, workoutTonnage, bwKg, weightNear, topWeight, topReps, totalReps,
   epley, brzycki, est1RM, readyToAdd,
   bodyFatNavy, bmiOf, lbmOf, ffmiOf,
 } from "./lib/calc.js";
@@ -22,6 +22,7 @@ import { useWakeLock } from "./lib/wakelock.js";
 import { buildLabel, checkForUpdate, reloadOnUpdate } from "./lib/update.js";
 import { useAppearance, TEXT_SIZES } from "./lib/appearance.js";
 import DisclaimerGate, { DisclaimerBody } from "./Disclaimer.jsx";
+import SetupGate from "./Setup.jsx";
 
 /* Графики грузятся отдельным куском: библиотека тяжёлая, а нужна только
    на двух вкладках из пяти. */
@@ -438,7 +439,7 @@ function RestBar({ rest, onDone, onAdjust, onSkip, muted }) {
   );
 }
 
-function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, conditions, restOverrides, setRestOverride, muted }) {
+function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, conditions, restOverrides, setRestOverride, muted, bodyAt }) {
   const [pickDay, setPickDay] = useState(days[0]?.id);
   const [picked, setPicked] = useState([]);
   const [custom, setCustom] = useState("");
@@ -574,7 +575,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
     ? { ...s, paused: false, resumedAt: Date.now() }
     : { ...s, paused: true, accumMs: (s.accumMs || 0) + (Date.now() - (s.resumedAt || s.startedAt)) });
 
-  const live = workoutTonnage({ exercises: session.exercises.map((e) => ({ ...e, sets: e.sets.filter((s) => s.done) })) });
+  const live = workoutTonnage({ exercises: session.exercises.map((e) => ({ ...e, sets: e.sets.filter((s) => s.done) })) }, bodyAt?.(session.date));
   const doneSets = session.exercises.reduce((n, e) => n + e.sets.filter((s) => s.done).length, 0);
 
   const finish = () => {
@@ -909,7 +910,7 @@ function BaseTab({ days, setDays, initialView, conditions }) {
  * Форма тренировки: правка записанной и запись задним числом — одно и то же.
  * Разница только в заголовке и в том, куда уходит результат.
  */
-function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [], isNew = false }) {
+function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [], isNew = false, bodyAt }) {
   const [adding, setAdding] = useState(false);
   /* работаем на копии — «Отмена» должна оставлять запись нетронутой */
   const [draft, setDraft] = useState(() => ({
@@ -958,7 +959,7 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
   const inp = { background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` };
   const total = workoutTonnage({
     exercises: draft.exercises.map((e) => ({ ...e, sets: e.sets.filter((s) => s.reps && (e.bodyweight || s.weight)) })),
-  });
+  }, bodyAt?.(draft.date));
 
   return (
     <Sheet onClose={onClose}>
@@ -1042,9 +1043,11 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
   );
 }
 
-function WorkoutCard({ w, isPR, onDelete, onEdit }) {
+function WorkoutCard({ w, isPR, onDelete, onEdit, bodyAt }) {
   const [open, setOpen] = useState(false);
-  const t = workoutTonnage(w);
+  /* Вес тела на дату тренировки: без него подтягивания не попадают в тоннаж. */
+  const body = bodyAt?.(w.date) || 0;
+  const t = workoutTonnage(w, body);
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
       <button onClick={() => setOpen(!open)} className="w-full text-left px-3.5 py-3">
@@ -1062,7 +1065,7 @@ function WorkoutCard({ w, isPR, onDelete, onEdit }) {
           </div>
         </div>
         <div className="flex w-full h-2 rounded-full overflow-hidden mt-2.5" style={{ background: C.line }}>
-          {w.exercises.filter((e) => exTonnage(e) > 0).map((e, i) => <div key={i} style={{ width: `${(exTonnage(e) / (t || 1)) * 100}%`, background: plateColor(topWeight(e)) }} />)}
+          {w.exercises.filter((e) => exTonnage(e, body) > 0).map((e, i) => <div key={i} style={{ width: `${(exTonnage(e, body) / (t || 1)) * 100}%`, background: plateColor(topWeight(e) ?? bwKg(e.name, body)) }} />)}
         </div>
       </button>
       {open && (
@@ -1070,7 +1073,12 @@ function WorkoutCard({ w, isPR, onDelete, onEdit }) {
           {w.exercises.map((ex, i) => (
             <div key={i} className="flex items-start justify-between gap-3 text-xs f-body py-1.5" style={{ borderTop: `1px solid ${C.line}` }}>
               <span style={{ color: C.chalk }}>{ex.name}{ex.uni && <UniTag />}</span>
-              <span className="f-num text-right shrink-0" style={{ color: C.dim }}>{ex.sets.map((s) => (ex.bodyweight ? s.reps : `${s.reps}×${s.weight}`)).join(" · ")}</span>
+              <span className="f-num text-right shrink-0" style={{ color: C.dim }}>
+                {ex.sets.map((s) => (ex.bodyweight ? s.reps : `${s.reps}×${s.weight}`)).join(" · ")}
+                {/* Своим весом непонятно, откуда взялись килограммы в тоннаже —
+                    подписываем, во что оценён один повтор. */}
+                {ex.bodyweight && bwKg(ex.name, body) && <span className="f-body block text-2xs">×{bwKg(ex.name, body)} кг своим весом</span>}
+              </span>
             </div>
           ))}
           {w.note && <div className="f-body text-xs pt-2" style={{ color: C.mustard }}>{w.note}</div>}
@@ -1088,7 +1096,7 @@ function WorkoutCard({ w, isPR, onDelete, onEdit }) {
   );
 }
 
-function JournalTab({ workouts, onDelete, onExport, onUpdate, onAdd, days, conditions }) {
+function JournalTab({ workouts, onDelete, onExport, onUpdate, onAdd, days, conditions, bodyAt }) {
   const [editing, setEditing] = useState(null);
   /* запись задним числом: сначала выбираем день, потом заполняем ту же форму */
   const [pickDay, setPickDay] = useState(false);
@@ -1112,8 +1120,8 @@ function JournalTab({ workouts, onDelete, onExport, onUpdate, onAdd, days, condi
   const { sorted, monthT, allT, prs, cells } = useMemo(() => {
     const sorted = [...workouts].sort((a, b) => b.date.localeCompare(a.date));
     const mk = today().slice(0, 7);
-    const monthT = workouts.filter((w) => w.date.startsWith(mk)).reduce((s, w) => s + workoutTonnage(w), 0);
-    const allT = workouts.reduce((s, w) => s + workoutTonnage(w), 0);
+    const monthT = workouts.filter((w) => w.date.startsWith(mk)).reduce((s, w) => s + workoutTonnage(w, bodyAt?.(w.date)), 0);
+    const allT = workouts.reduce((s, w) => s + workoutTonnage(w, bodyAt?.(w.date)), 0);
 
     const best = {};
     const prs = new Set();
@@ -1159,7 +1167,7 @@ function JournalTab({ workouts, onDelete, onExport, onUpdate, onAdd, days, condi
       </button>
       <div className="mt-4 space-y-2.5">
         {!sorted.length && <div className="f-body text-sm text-center py-12" style={{ color: C.dim }}>Пусто. Собери первую тренировку во вкладке «Сессия».</div>}
-        {sorted.map((w) => <WorkoutCard key={w.id} w={w} isPR={prs.has(w.id)} onDelete={onDelete} onEdit={setEditing} />)}
+        {sorted.map((w) => <WorkoutCard key={w.id} w={w} isPR={prs.has(w.id)} onDelete={onDelete} onEdit={setEditing} bodyAt={bodyAt} />)}
       </div>
 
       {editing && (
@@ -1167,6 +1175,7 @@ function JournalTab({ workouts, onDelete, onExport, onUpdate, onAdd, days, condi
           workout={editing}
           workouts={workouts}
           conditions={conditions}
+          bodyAt={bodyAt}
           onClose={() => setEditing(null)}
           onSave={(w) => { onUpdate(w); setEditing(null); }}
         />
@@ -1201,6 +1210,7 @@ function JournalTab({ workouts, onDelete, onExport, onUpdate, onAdd, days, condi
           workout={creating}
           workouts={workouts}
           conditions={conditions}
+          bodyAt={bodyAt}
           isNew
           onClose={() => setCreating(null)}
           onSave={(w) => { onAdd(w); setCreating(null); }}
@@ -1219,7 +1229,7 @@ const METRICS = [
 ];
 const RANGES = [{ id: 30, label: "30 дн" }, { id: 90, label: "90 дн" }, { id: 9999, label: "всё" }];
 
-function ProgressTab({ workouts }) {
+function ProgressTab({ workouts, bodyAt }) {
   const [view, setView] = useState("exercise");
   const names = useMemo(() => { const s = new Set(); workouts.forEach((w) => w.exercises.forEach((e) => s.add(e.name))); return [...s].sort(); }, [workouts]);
   const [sel, setSel] = useState("");
@@ -1229,9 +1239,9 @@ function ProgressTab({ workouts }) {
 
   const cutoff = useMemo(() => daysAgo(range), [range]);
   const series = useMemo(() => [...workouts].filter((w) => w.date >= cutoff).sort((a, b) => a.date.localeCompare(b.date))
-    .map((w) => { const ex = w.exercises.find((e) => e.name === sel); return ex ? { date: fmtDate(w.date), weight: topWeight(ex), e1rm: est1RM(ex), tonnage: exTonnage(ex) || null, reps: totalReps(ex) } : null; })
+    .map((w) => { const ex = w.exercises.find((e) => e.name === sel); return ex ? { date: fmtDate(w.date), weight: topWeight(ex), e1rm: est1RM(ex), tonnage: exTonnage(ex, bodyAt?.(w.date)) || null, reps: totalReps(ex) } : null; })
     .filter(Boolean), [workouts, sel, cutoff]);
-  const totalSeries = useMemo(() => [...workouts].filter((w) => w.date >= cutoff).sort((a, b) => a.date.localeCompare(b.date)).map((w) => ({ date: fmtDate(w.date), tonnage: workoutTonnage(w) })), [workouts, cutoff]);
+  const totalSeries = useMemo(() => [...workouts].filter((w) => w.date >= cutoff).sort((a, b) => a.date.localeCompare(b.date)).map((w) => ({ date: fmtDate(w.date), tonnage: workoutTonnage(w, bodyAt?.(w.date)) })), [workouts, cutoff, bodyAt]);
 
   const volume = useMemo(() => {
     const cur = daysAgo(7);
@@ -1318,7 +1328,7 @@ function ProgressTab({ workouts }) {
               <div style={{ width: `${(volume.push / (volume.push + volume.pull)) * 100}%`, background: C.red }} />
               <div style={{ width: `${(volume.pull / (volume.push + volume.pull)) * 100}%`, background: C.blue }} />
             </div>
-            <div className="f-body text-2xs mt-1.5" style={{ color: C.dim }}>{volume.pull >= volume.push ? "Тяг не меньше жимов — плечу это нравится." : "Жимов больше, чем тяг. При больном плече лучше держать тяги в равновесии или выше."}</div>
+            <div className="f-body text-2xs mt-1.5" style={{ color: C.dim }}>{volume.pull >= volume.push ? "Тяг не меньше жимов — так плечевой сустав держится ровно." : "Жимов больше, чем тяг. Перекос в жимы стягивает плечи вперёд; тяг стоит делать не меньше."}</div>
           </div>
         )}
         {!volume.rows.length && <div className="f-body text-sm text-center py-12" style={{ color: C.dim }}>Нет тренировок за последние 2 недели.</div>}
@@ -1712,6 +1722,7 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [storageInfo, setStorageInfo] = useState(null);
   const [accepted, setAccepted] = useState(null); // null — ещё не прочитали из хранилища
+  const [setupSeen, setSetupSeen] = useState(true); // до чтения из хранилища не мигаем экраном
   const [showTerms, setShowTerms] = useState(false);
   const [updating, setUpdating] = useState(false);
   const fileInput = useRef(null);
@@ -1725,6 +1736,7 @@ export default function App() {
       setSessionState(await loadKey("session"));
       const p = await loadKey("profile"); if (p) setProfileState(p);
       setAccepted(!!(await loadKey("accepted")));
+      setSetupSeen(!!(await loadKey("setup")));
       setLoading(false);
       /* просим браузер закрепить хранилище, чтобы он не вычистил дневник при нехватке места */
       const persisted = await requestPersistence();
@@ -1763,6 +1775,11 @@ export default function App() {
   const addMetric = useCallback((m) => setMetrics((prev) => { const next = [...prev, m]; saveKey("metrics", next); return next; }), []);
   const deleteMetric = useCallback((id) => setMetrics((prev) => { const next = prev.filter((m) => m.id !== id); saveKey("metrics", next); return next; }), []);
 
+  /* Вес тела на любую дату. Нужен и тоннажу (подтягивания), и расходу
+     калорий. Берётся ближайший замер, а не последний: тренировка трёхмесячной
+     давности не должна считаться по сегодняшнему весу. */
+  const bodyAt = useCallback((date) => weightNear(metrics, date)?.kg || 0, [metrics]);
+
   const buildExport = () => {
     const lines = ["# Тренировочный дневник — выгрузка", ""];
     if (profile.height) lines.push(`Профиль: рост ${profile.height} см, возраст ${profile.age || "—"}`, "");
@@ -1777,7 +1794,7 @@ export default function App() {
     }
     lines.push("## Тренировки");
     [...workouts].sort((a, b) => a.date.localeCompare(b.date)).forEach((w) => {
-      lines.push("", `### ${w.date} — ${w.dayLabel} — тоннаж ${workoutTonnage(w)} кг${w.durationMin ? `, ${w.durationMin} мин` : ""}`);
+      lines.push("", `### ${w.date} — ${w.dayLabel} — тоннаж ${workoutTonnage(w, bodyAt(w.date))} кг${w.durationMin ? `, ${w.durationMin} мин` : ""}`);
       w.exercises.forEach((ex) => {
         const s = ex.sets.map((x) => (ex.bodyweight ? `${x.reps}` : `${x.reps}×${x.weight}`)).join(", ");
         const rm = est1RM(ex);
@@ -1860,6 +1877,23 @@ export default function App() {
   /* до принятия условий приложение не показывается */
   if (!accepted) return <DisclaimerGate onAccept={() => { setAccepted(true); saveKey("accepted", true); }} />;
 
+  /* знакомство сразу после условий: без роста, веса и возраста половина
+     расчётов показывает прочерки, а искать их во вкладке «Тело» никто
+     не догадается. Спрашиваем один раз и разрешаем пропустить. */
+  const finishSetup = (v) => {
+    const p = { ...profile };
+    if (v) {
+      if (v.height) p.height = v.height;
+      if (v.age) p.age = v.age;
+      if (v.sex) p.sex = v.sex;
+      setProfile(p);
+      if (+v.weight > 0) addMetric({ id: uid(), date: today(), weight: v.weight });
+    }
+    setSetupSeen(true);
+    saveKey("setup", true);
+  };
+  if (!setupSeen) return <SetupGate onDone={finishSetup} onSkip={() => finishSetup(null)} />;
+
   const tabs = [
     { id: "session", label: "Сессия", icon: Play },
     { id: "journal", label: "Журнал", icon: BookOpen },
@@ -1880,9 +1914,9 @@ export default function App() {
 
       <div ref={scroller} className="flex-1 overflow-y-auto w-full max-w-xl mx-auto" role="tabpanel" id="tabpanel" aria-labelledby={`tab-${shownTab}`}>
         <div key={shownTab} className="tab-in">
-        {shownTab === "session" && <SessionTab session={session} setSession={setSession} workouts={workouts} days={days} onFinish={finishSession} goToDays={() => { setBaseView("days"); setTab("base"); }} conditions={conditions} restOverrides={restOverrides} setRestOverride={setRestOverride} muted={muted} />}
-        {shownTab === "journal" && <JournalTab workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} onUpdate={updateWorkout} onAdd={addWorkout} days={days} conditions={conditions} />}
-        {shownTab === "progress" && <ProgressTab workouts={workouts} />}
+        {shownTab === "session" && <SessionTab session={session} setSession={setSession} workouts={workouts} days={days} onFinish={finishSession} goToDays={() => { setBaseView("days"); setTab("base"); }} conditions={conditions} restOverrides={restOverrides} setRestOverride={setRestOverride} muted={muted} bodyAt={bodyAt} />}
+        {shownTab === "journal" && <JournalTab workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} onUpdate={updateWorkout} onAdd={addWorkout} days={days} conditions={conditions} bodyAt={bodyAt} />}
+        {shownTab === "progress" && <ProgressTab workouts={workouts} bodyAt={bodyAt} />}
         {shownTab === "base" && <BaseTab days={days} setDays={setDays} initialView={baseView} conditions={conditions} />}
         {shownTab === "body" && <BodyTab metrics={metrics} profile={profile} setProfile={setProfile} onAdd={addMetric} onDelete={deleteMetric} workouts={workouts} restOverrides={restOverrides} />}
         </div>

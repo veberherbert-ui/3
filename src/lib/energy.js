@@ -1,4 +1,5 @@
 import { restFor } from "./rest.js";
+import { weightNear } from "./calc.js";
 
 /* Расход калорий за конкретную тренировку.
 
@@ -67,16 +68,6 @@ export const LEVELS = [
 
 export function levelFor(density) {
   return LEVELS.find((l) => density < l.upTo) || LEVELS[LEVELS.length - 1];
-}
-
-/** Вес тела на дату тренировки: ближайший замер, а не последний. */
-export function weightNear(metrics, date) {
-  const withWeight = (metrics || []).filter((m) => +m.weight > 0);
-  if (!withWeight.length) return null;
-  let best = withWeight[0];
-  for (const m of withWeight)
-    if (Math.abs(Date.parse(m.date) - Date.parse(date)) < Math.abs(Date.parse(best.date) - Date.parse(date))) best = m;
-  return { kg: +best.weight, date: best.date };
 }
 
 /**
