@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { Plus, X, TrendingUp, BookOpen, Dumbbell, Flame, Settings, Trash2, Check, Info, Play, Timer, Calculator, Copy, ExternalLink, Activity, Pause, ChevronDown, ChevronUp, MoreHorizontal, Search, Library, Layers, Pencil, RotateCcw, Download, Upload, Share2, HardDrive, ShieldAlert, TriangleAlert, HeartPulse, Repeat2 } from "lucide-react";
+import { Plus, X, TrendingUp, BookOpen, Dumbbell, Flame, Settings, Trash2, Check, Info, Play, Timer, Calculator, Copy, ExternalLink, Activity, Pause, ChevronDown, ChevronUp, MoreHorizontal, Search, Library, Layers, Pencil, RotateCcw, Download, Upload, Share2, HardDrive, ShieldAlert, TriangleAlert, HeartPulse, Repeat2, Volume2, VolumeX } from "lucide-react";
 
 import { EXDB, GROUPS, ALL_MUSCLES, PUSH_M, PULL_M, PRESETS, DEFAULT_DAYS, isUni, isBW } from "./data/exercises.js";
 import { CONDITIONS, CONDITION_BY_ID, helpfulNote } from "./data/conditions.js";
@@ -15,9 +15,9 @@ import {
 } from "./lib/calc.js";
 import { loadKey, saveKey, deleteKey, requestPersistence, storageEstimate } from "./lib/storage.js";
 import { shareOrDownload, readFileAsText, backupName } from "./lib/backup.js";
-
-/** Отдых между подходами по умолчанию, секунд */
-const REST_SEC = 90;
+import { restFor, fmtRest, stepRest } from "./lib/rest.js";
+import { primeAudio, playRestOver, playTick } from "./lib/sound.js";
+import { useWakeLock } from "./lib/wakelock.js";
 
 /* ============ atoms ============ */
 const Chip = ({ label, value, sub, accent }) => (
@@ -177,31 +177,82 @@ function useTicker(active) {
   }, [active]);
 }
 
+/** Часы тренировки: крупная цифра, её видно с вытянутой руки. */
 function Elapsed({ session, doneSets, live }) {
   useTicker(!session.paused);
   return (
-    <div className="f-num text-[11px]" style={{ color: C.dim }}>
-      {fmtClock(elapsedMs(session, Date.now()))} · {doneSets} подх. · {live.toLocaleString("ru-RU")} кг
+    <div>
+      <div className="f-num text-3xl font-bold leading-none tabular-nums" style={{ color: session.paused ? C.mustard : C.chalk }}>
+        {fmtClock(elapsedMs(session, Date.now()))}
+      </div>
+      <div className="f-body text-[11px] mt-1" style={{ color: C.dim }}>
+        {doneSets} подх. · {live.toLocaleString("ru-RU")} кг
+      </div>
     </div>
   );
 }
 
-/** Отдых считается от метки времени в самой сессии, а сессия сохраняется —
-    поэтому таймер переживает сворачивание и перезапуск приложения. */
-function RestTimer({ restUntil, onDone }) {
+/* Отдых считается от метки времени в самой сессии, а сессия сохраняется —
+   поэтому таймер переживает сворачивание и перезапуск приложения. */
+
+/**
+ * Полоса отдыха во всю ширину: крупный счётчик, убывающая заливка,
+ * подстройка длительности на месте и сигнал в конце.
+ */
+function RestBar({ rest, onDone, onAdjust, onSkip, muted }) {
   useTicker(true);
-  const left = Math.ceil((restUntil - Date.now()) / 1000);
-  useEffect(() => { if (left <= 0) onDone(); }, [left, onDone]);
-  if (left <= 0) return null;
+  const { until, total, exName } = rest;
+  const leftMs = until - Date.now();
+  const left = Math.max(0, Math.ceil(leftMs / 1000));
+  const done = leftMs <= 0;
+
+  /* сигналим один раз: пока полоса на экране, эти флаги живут в ней самой */
+  const signalled = useRef(false);
+  const ticked = useRef(false);
+  useEffect(() => {
+    if (done && !signalled.current) {
+      signalled.current = true;
+      if (!muted) playRestOver();
+    }
+    if (!done && left <= 3 && !ticked.current) {
+      ticked.current = true;
+      if (!muted) playTick();
+    }
+  }, [done, left, muted]);
+
+  const pct = total > 0 ? Math.max(0, Math.min(100, (leftMs / (total * 1000)) * 100)) : 0;
+  const accent = done ? C.moss : left <= 10 ? C.mustard : C.red;
+
   return (
-    <div className="flex items-center gap-1 rounded-full px-2.5 py-1.5" style={{ background: C.red }}>
-      <Timer size={13} color={C.chalk} />
-      <span className="f-num text-xs font-semibold" style={{ color: C.chalk }}>{left}</span>
+    <div className="rounded-xl overflow-hidden mb-3" style={{ background: C.surface, border: `1px solid ${accent}` }}>
+      <div className="px-3.5 pt-3 pb-2.5 flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="f-body text-[10px] uppercase tracking-wide flex items-center gap-1" style={{ color: accent }}>
+            <Timer size={12} /> {done ? "Отдых окончен" : "Отдых"}
+          </div>
+          <div className="f-body text-xs truncate mt-0.5" style={{ color: C.dim }}>{exName}</div>
+        </div>
+        <div className="f-num text-4xl font-bold leading-none tabular-nums shrink-0" style={{ color: accent }}>
+          {done ? "0:00" : fmtClock(left * 1000)}
+        </div>
+      </div>
+
+      <div className="h-1.5 mx-3.5 rounded-full overflow-hidden" style={{ background: C.line }}>
+        <div className="h-full rounded-full" style={{ width: `${pct}%`, background: accent, transition: "width 1s linear" }} />
+      </div>
+
+      <div className="flex gap-1.5 p-3">
+        <button onClick={() => onAdjust(-1)} className="f-num flex-1 rounded-lg py-2 text-xs font-semibold" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>−15</button>
+        <button onClick={() => onAdjust(1)} className="f-num flex-1 rounded-lg py-2 text-xs font-semibold" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>+15</button>
+        <button onClick={done ? onDone : onSkip} className="f-body flex-[1.6] rounded-lg py-2 text-xs font-medium" style={{ background: done ? accent : C.surfaceHi, color: done ? C.bg : C.dim, border: `1px solid ${done ? accent : C.line}` }}>
+          {done ? "Продолжить" : "Пропустить"}
+        </button>
+      </div>
     </div>
   );
 }
 
-function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, conditions }) {
+function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, conditions, restOverrides, setRestOverride, muted }) {
   const [pickDay, setPickDay] = useState(days[0]?.id);
   const [picked, setPicked] = useState([]);
   const [custom, setCustom] = useState("");
@@ -212,7 +263,20 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
   useEffect(() => { if (day) setPicked(day.exercises); }, [pickDay, days.length]); // eslint-disable-line
 
   /* объявлено до раннего возврата ниже — хуки нельзя вызывать под условием */
-  const clearRest = useCallback(() => setSession((s) => (s?.restUntil ? { ...s, restUntil: null } : s)), [setSession]);
+  const clearRest = useCallback(() => setSession((s) => (s?.rest ? { ...s, rest: null } : s)), [setSession]);
+
+  /* пока идёт тренировка, экран не гаснет */
+  useWakeLock(!!session);
+
+  /** ±15 секунд: правит текущий отсчёт и запоминает новое время для упражнения */
+  const adjustRest = useCallback((dir) => {
+    setSession((s) => {
+      if (!s?.rest) return s;
+      const total = stepRest(s.rest.total, dir);
+      const delta = (total - s.rest.total) * 1000;
+      return { ...s, rest: { ...s.rest, total, until: s.rest.until + delta } };
+    });
+  }, [setSession]);
 
   const lastFor = useCallback((name) => {
     for (const w of [...workouts].sort((a, b) => b.date.localeCompare(a.date))) {
@@ -288,8 +352,14 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
     e.sets[j] = { ...e.sets[j], [f]: v }; ex[i] = e; return { ...s, exercises: ex };
   });
   const markDone = (i, j) => {
-    const s = session.exercises[i].sets[j];
-    if (!s.done && s.reps) setSession((prev) => ({ ...prev, restUntil: Date.now() + REST_SEC * 1000 }));
+    const ex = session.exercises[i];
+    const s = ex.sets[j];
+    if (!s.done && s.reps) {
+      /* касание пользователя — единственный момент, когда iOS разрешает включить звук */
+      primeAudio();
+      const total = restFor(ex.name, restOverrides);
+      setSession((prev) => ({ ...prev, rest: { until: Date.now() + total * 1000, total, exName: ex.name } }));
+    }
     upd(i, j, "done", !s.done);
   };
   const addSet = (i) => setSession((s) => {
@@ -318,18 +388,28 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
 
   return (
     <div className="px-4 pt-3 pb-10">
+      {session.rest && (
+        <RestBar
+          rest={session.rest}
+          muted={muted}
+          onDone={clearRest}
+          onSkip={clearRest}
+          onAdjust={(dir) => {
+            adjustRest(dir);
+            setRestOverride(session.rest.exName, stepRest(session.rest.total, dir));
+          }}
+        />
+      )}
+
       <div className="rounded-xl px-3.5 py-3" style={{ background: C.surfaceHi, border: `1px solid ${session.paused ? C.mustard : C.line}` }}>
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <div className="f-display text-sm font-semibold truncate" style={{ color: C.chalk }}>{session.dayLabel}</div>
+            <div className="f-display text-sm font-semibold truncate mb-1.5" style={{ color: C.chalk }}>{session.dayLabel}</div>
             <Elapsed session={session} doneSets={doneSets} live={live} />
           </div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            {session.restUntil && <RestTimer restUntil={session.restUntil} onDone={clearRest} />}
-            <button onClick={togglePause} className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
-              {session.paused ? <Play size={15} color={C.mustard} /> : <Pause size={15} color={C.dim} />}
-            </button>
-          </div>
+          <button onClick={togglePause} className="w-11 h-11 rounded-lg flex items-center justify-center shrink-0" style={{ background: C.surface, border: `1px solid ${session.paused ? C.mustard : C.line}` }}>
+            {session.paused ? <Play size={18} color={C.mustard} /> : <Pause size={18} color={C.dim} />}
+          </button>
         </div>
         <div className="flex gap-2 mt-2.5">
           <button onClick={finish} className="f-display flex-1 rounded-lg py-2.5 text-sm font-semibold flex items-center justify-center gap-1.5" style={{ background: C.red, color: C.chalk }}><Check size={15} /> Завершить и сохранить</button>
@@ -348,6 +428,9 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
                   <div className="f-body text-sm font-medium" style={{ color: C.chalk }}>{ex.name}{ex.uni && <UniTag />}<RiskMark name={ex.name} conditions={conditions} /></div>
                   {ex.uni && <div className="f-body text-[10px]" style={{ color: C.blue }}>вводи один подход — считается за обе стороны</div>}
                   {prev && <div className="f-num text-[10px] truncate" style={{ color: C.dim }}>прошлый раз: {setsLine(prev.ex)}</div>}
+                  <div className="f-body text-[10px] flex items-center gap-1 mt-0.5" style={{ color: C.dim }}>
+                    <Timer size={10} /> отдых {fmtRest(restFor(ex.name, restOverrides))}
+                  </div>
                 </div>
                 <div className="flex gap-1.5 shrink-0">
                   <button onClick={() => setInfo(ex.name)}><Info size={15} color={C.dim} /></button>
@@ -1190,7 +1273,12 @@ export default function App() {
 
   const setDays = useCallback((d) => { setDaysState(d); saveKey("days", d); }, []);
   const setSession = useCallback((v) => setSessionState((prev) => { const next = typeof v === "function" ? v(prev) : v; saveKey("session", next); return next; }), []);
-  const setProfile = useCallback((p) => { setProfileState(p); saveKey("profile", p); }, []);
+  /* принимает и объект, и функцию — как обычный сеттер состояния */
+  const setProfile = useCallback((v) => setProfileState((prev) => {
+    const next = typeof v === "function" ? v(prev) : v;
+    saveKey("profile", next);
+    return next;
+  }), []);
   const finishSession = useCallback((w) => { setWorkouts((prev) => { const next = [w, ...prev]; saveKey("workouts", next); return next; }); setSession(null); setTab("journal"); }, [setSession]);
   const deleteWorkout = useCallback((id) => setWorkouts((prev) => { const next = prev.filter((w) => w.id !== id); saveKey("workouts", next); return next; }), []);
   const addMetric = useCallback((m) => setMetrics((prev) => { const next = [...prev, m]; saveKey("metrics", next); return next; }), []);
@@ -1223,6 +1311,13 @@ export default function App() {
 
   /** Состояния здоровья — из них берутся предупреждения по всему приложению. */
   const conditions = useMemo(() => profile.conditions || [], [profile.conditions]);
+
+  /** Правки времени отдыха, сделанные прямо на тренировке */
+  const restOverrides = useMemo(() => profile.restOverrides || {}, [profile.restOverrides]);
+  const setRestOverride = useCallback((name, sec) => {
+    setProfile((p) => ({ ...p, restOverrides: { ...(p.restOverrides || {}), [name]: sec } }));
+  }, [setProfile]);
+  const muted = !!profile.muted;
 
   const backupJSON = () => JSON.stringify({ v: 1, workouts, metrics, days, profile }, null, 0);
 
@@ -1296,7 +1391,7 @@ export default function App() {
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        {tab === "session" && <SessionTab session={session} setSession={setSession} workouts={workouts} days={days} onFinish={finishSession} goToDays={() => { setBaseView("days"); setTab("base"); }} conditions={conditions} />}
+        {tab === "session" && <SessionTab session={session} setSession={setSession} workouts={workouts} days={days} onFinish={finishSession} goToDays={() => { setBaseView("days"); setTab("base"); }} conditions={conditions} restOverrides={restOverrides} setRestOverride={setRestOverride} muted={muted} />}
         {tab === "journal" && <JournalTab workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} />}
         {tab === "progress" && <ProgressTab workouts={workouts} />}
         {tab === "base" && <BaseTab days={days} setDays={setDays} initialView={baseView} conditions={conditions} />}
@@ -1353,6 +1448,13 @@ export default function App() {
                 : "Хранилище не закреплено. Делай копию хотя бы раз в месяц."}
             </span>
           </div>
+          <button
+            onClick={() => { const next = !muted; setProfile((p) => ({ ...p, muted: next })); if (!next) { primeAudio(); playTick(); } }}
+            className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2"
+            style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
+            {muted ? <VolumeX size={15} color={C.dim} /> : <Volume2 size={15} color={C.moss} />}
+            Сигнал в конце отдыха: {muted ? "выключен" : "включён"}
+          </button>
           <button onClick={saveBackupFile} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Share2 size={15} /> Сохранить копию файлом</button>
           <button onClick={async () => { try { await navigator.clipboard.writeText(backupJSON()); say("Копия в буфере обмена"); } catch { setShowSettings(false); setExportText(backupJSON()); } }} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Copy size={15} /> Скопировать копию текстом</button>
           <button onClick={openImport} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Upload size={15} /> Восстановить из копии</button>
