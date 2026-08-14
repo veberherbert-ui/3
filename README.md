@@ -160,19 +160,38 @@ npm run smoke
 
 ### Публикация
 
-Приложение отдаётся из корня — так работают Cloudflare Pages, Netlify, Vercel
-и локальный просмотр. Настройки для Cloudflare Pages:
+Приложение отдаётся из корня — так работают Cloudflare, Netlify, Vercel
+и локальный просмотр.
+
+Сейчас оно живёт в **Cloudflare Workers** (адрес вида `имя.аккаунт.workers.dev`).
+Настройки сборки:
 
 | Поле | Значение |
 |---|---|
 | Production branch | `main` |
-| Framework preset | Vite (или None) |
 | Build command | `npm run build` |
-| Build output directory | `dist` |
+| Deploy command | `npx wrangler deploy` |
 
-**Production branch важнее всего.** Cloudflare по умолчанию собирает ветку,
-назначенную основной в самом GitHub. Если там осталась другая ветка, сборка
-упадёт на `npm error Missing script: "build"` — она собирает не тот код.
+Что где искать в панели: **Settings → Builds → Branch control**.
+
+Своего серверного кода нет — Worker состоит только из файлов сборки.
+Что именно выкладывать, wrangler берёт из [`wrangler.jsonc`](wrangler.jsonc)
+в корне репозитория. Имя в нём должно совпадать с именем проекта
+в Cloudflare, иначе выкладка уедет не туда.
+
+Две ошибки, на которые это уже ломалось:
+
+- `npm error Missing script: "build"` — собирается не та ветка. Cloudflare
+  запоминает ветку при подключении проекта, и смена основной ветки
+  в GitHub его не двигает: **Production branch надо править в самом
+  Cloudflare.**
+- `Missing entry-point to Worker script or to assets directory` — нет
+  `wrangler.jsonc` или в нём не указана папка сборки.
+
+Проверить конфиг, ничего не выкладывая: `npx wrangler versions upload --dry-run`.
+
+Для Cloudflare Pages, Netlify и Vercel конфиг не нужен — там достаточно
+указать команду `npm run build` и папку `dist`.
 
 GitHub Pages отдаёт репозиторий из подпапки с его именем, поэтому там сборка
 идёт с `BASE_PATH=/3/` — это уже прописано в `.github/workflows/deploy.yml`
