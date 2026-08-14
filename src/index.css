@@ -1,0 +1,102 @@
+/* Шрифты лежат в сборке локально — приложение полностью работает без интернета */
+@import "@fontsource/oswald/500.css";
+@import "@fontsource/oswald/600.css";
+@import "@fontsource/oswald/700.css";
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/600.css";
+@import "@fontsource/jetbrains-mono/700.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #15171b;
+  /* высота полосы жестов внизу iPhone и «чёлки» сверху */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  background: var(--bg);
+}
+
+body {
+  margin: 0;
+  /* без резинового отскока при прокрутке — иначе не похоже на приложение */
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* по тексту не должно быть выделения от долгого нажатия, но поля ввода — исключение */
+body {
+  -webkit-user-select: none;
+  user-select: none;
+}
+input,
+textarea,
+select {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.f-display {
+  font-family: "Oswald", sans-serif;
+  letter-spacing: 0.01em;
+}
+.f-body {
+  font-family: "Inter", sans-serif;
+}
+.f-num {
+  font-family: "JetBrains Mono", monospace;
+}
+
+/* Safari по умолчанию скругляет и красит поля по-своему */
+input,
+textarea,
+select,
+button {
+  font-size: 16px; /* меньше 16px — iOS зумит страницу при фокусе */
+  border-radius: 0;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.7);
+}
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* отступы под вырез сверху и полосу жестов снизу */
+.pad-safe-top {
+  padding-top: calc(var(--safe-top) + 0.75rem);
+}
+.pad-safe-bottom {
+  padding-bottom: var(--safe-bottom);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
