@@ -1,3 +1,21 @@
+# Зависимости
 node_modules/
-*.zip
+
+# Сборка
+dist/
+dist-ssr/
+*.local
+
+# Логи
+*.log
+npm-debug.log*
+
+# Окружение
+.env
+.env.local
+
+# Редакторы и ОС
+.vscode/
+.idea/
 .DS_Store
+Thumbs.db

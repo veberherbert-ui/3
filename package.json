@@ -1,10 +1,37 @@
 {
-  "name": "avito-parser-extension",
-  "version": "1.0.0",
-  "description": "Браузерное расширение для фильтрации объявлений Avito по ключевым словам, словам-исключениям и типу продавца.",
+  "name": "iron-diary",
   "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Железный дневник — трекер силовых тренировок, работает офлайн",
   "scripts": {
-    "test": "node tools/test_parser.js",
-    "icons": "python3 tools/make_icons.py"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "smoke": "node tools/smoke.mjs",
+    "icons": "node tools/make-icons.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/veberherbert-ui/3.git"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@fontsource/oswald": "^5.3.0",
+    "idb-keyval": "^6.3.0",
+    "lucide-react": "^1.31.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "recharts": "^3.10.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.5",
+    "autoprefixer": "^10.5.4",
+    "postcss": "^8.5.26",
+    "tailwindcss": "^3.4.19",
+    "vite": "^8.2.1",
+    "vite-plugin-pwa": "^1.3.0"
   }
 }
