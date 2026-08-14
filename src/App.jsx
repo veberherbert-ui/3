@@ -3,6 +3,7 @@ import { Plus, X, TrendingUp, BookOpen, Dumbbell, Flame, Settings, Trash2, Check
 
 import { EXDB, GROUPS, ALL_MUSCLES, PUSH_M, PULL_M, PRESETS, DEFAULT_DAYS, isUni, isBW } from "./data/exercises.js";
 import { CONDITIONS, CONDITION_BY_ID, helpfulNote } from "./data/conditions.js";
+import { TECHNIQUE } from "./data/technique.js";
 import { saferAlternatives, worstRisk, risksFor, dayWarnings } from "./lib/swap.js";
 import { C, plateColor } from "./lib/theme.js";
 import { today, daysAgo, fmtDate } from "./lib/dates.js";
@@ -192,6 +193,72 @@ function ExercisePicker({ title, onPick, onClose, has, conditions = [] }) {
   );
 }
 
+/** Разбор техники: исходное положение, ход движения, ключевые точки, ошибки, дыхание. */
+function TechniqueBlock({ name, fallbackCue }) {
+  const t = TECHNIQUE[name];
+
+  /* своё упражнение или база ещё не дополнена — показываем короткую подсказку */
+  if (!t) {
+    return fallbackCue ? (
+      <div className="rounded-lg p-3 mb-3" style={{ background: C.surfaceHi, borderLeft: `3px solid ${C.mustard}` }}>
+        <div className="f-body text-[11px] uppercase tracking-wide mb-1" style={{ color: C.mustard }}>Ключ к технике</div>
+        <div className="f-body text-sm" style={{ color: C.chalk }}>{fallbackCue}</div>
+      </div>
+    ) : null;
+  }
+
+  const Step = ({ n, title, children }) => (
+    <div className="flex gap-2.5 mb-3">
+      <span className="f-num shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-semibold mt-0.5"
+        style={{ background: C.surface, color: C.dim, border: `1px solid ${C.line}` }}>{n}</span>
+      <div className="min-w-0">
+        <div className="f-body text-[11px] uppercase tracking-wide mb-0.5" style={{ color: C.dim }}>{title}</div>
+        <div className="f-body text-sm leading-relaxed" style={{ color: C.chalk }}>{children}</div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="mb-3">
+      <div className="rounded-lg p-3 mb-2" style={{ background: C.surfaceHi }}>
+        <Step n="1" title="Исходное положение">{t.setup}</Step>
+        <Step n="2" title="Ход движения">{t.exec}</Step>
+        <div className="flex gap-2.5">
+          <span className="shrink-0 w-5" />
+          <div className="f-body text-[11px] flex items-start gap-1.5" style={{ color: C.blue }}>
+            <Activity size={12} className="shrink-0 mt-0.5" />
+            <span>{t.breath}</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-lg p-3 mb-2" style={{ background: C.surfaceHi, borderLeft: `3px solid ${C.mustard}` }}>
+        <div className="f-body text-[11px] uppercase tracking-wide mb-1.5" style={{ color: C.mustard }}>Ключевые точки</div>
+        <ul className="space-y-1.5">
+          {t.cues.map((c) => (
+            <li key={c} className="f-body text-sm flex gap-2 leading-relaxed" style={{ color: C.chalk }}>
+              <span style={{ color: C.mustard }}>·</span>
+              <span>{c}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="rounded-lg p-3" style={{ background: C.surfaceHi, borderLeft: `3px solid ${C.red}` }}>
+        <div className="f-body text-[11px] uppercase tracking-wide mb-1.5" style={{ color: C.red }}>Частые ошибки</div>
+        <ul className="space-y-1.5">
+          {t.mistakes.map((c) => (
+            <li key={c} className="f-body text-sm flex gap-2 leading-relaxed" style={{ color: C.chalk }}>
+              <span style={{ color: C.red }}>×</span>
+              <span>{c}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
 function ExerciseInfo({ name, onClose, days, onAddToDay, conditions = [] }) {
   const [shown, setShown] = useState(name);
   useEffect(() => setShown(name), [name]);
@@ -214,10 +281,7 @@ function ExerciseInfo({ name, onClose, days, onAddToDay, conditions = [] }) {
         </div>
         <RiskPanel name={shown} conditions={conditions} onOpen={setShown} />
         <div className="f-body text-sm leading-relaxed mb-3" style={{ color: C.chalk }}>{info.d}</div>
-        <div className="rounded-lg p-3 mb-3" style={{ background: C.surfaceHi, borderLeft: `3px solid ${C.mustard}` }}>
-          <div className="f-body text-[11px] uppercase tracking-wide mb-1" style={{ color: C.mustard }}>Ключ к технике</div>
-          <div className="f-body text-sm" style={{ color: C.chalk }}>{info.cue}</div>
-        </div>
+        <TechniqueBlock name={shown} fallbackCue={info.cue} />
         {info.uni && <div className="f-body text-[11px] mb-3" style={{ color: C.blue }}>Одностороннее: записывай один подход — приложение считает обе стороны, тоннаж умножается на два.</div>}
       </>) : <div className="f-body text-sm mb-3" style={{ color: C.dim }}>Своё упражнение — описания пока нет.</div>}
 
@@ -1222,7 +1286,14 @@ function ConditionsCard({ profile, setProfile }) {
                   <span className="min-w-0">
                     <span className="f-body text-sm block" style={{ color: on ? C.chalk : C.dim }}>{c.name}</span>
                     <span className="f-body text-[10px] block" style={{ color: C.dim }}>{c.hint}</span>
-                    {on && <span className="f-body text-[11px] block mt-1.5" style={{ color: C.chalk }}>{c.guide}</span>}
+                    {on && (
+                      <>
+                        <span className="f-body text-[11px] block mt-1.5 leading-relaxed" style={{ color: C.chalk }}>{c.guide}</span>
+                        <span className="f-body text-[11px] block mt-2 leading-relaxed" style={{ color: C.red }}>
+                          Не в зал, а к врачу: {c.stop}
+                        </span>
+                      </>
+                    )}
                   </span>
                 </button>
               );

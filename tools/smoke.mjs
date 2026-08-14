@@ -177,6 +177,8 @@ const card = await page.locator("body").innerText();
 ok(/Не рекомендуется/i.test(card), "предупреждение в карточке упражнения");
 ok(/чем заменить/i.test(card), "показаны замены");
 ok(card.includes("Жим сведёнными гантелями сидя"), "замена осмысленная (нейтральный хват)");
+for (const part of ["Исходное положение", "Ход движения", "Ключевые точки", "Частые ошибки"])
+  ok(new RegExp(part, "i").test(card), `в карточке есть раздел «${part.toLowerCase()}»`);
 await page.getByText("Жим сведёнными гантелями сидя").first().click();
 await page.waitForTimeout(600);
 ok((await page.locator("body").innerText()).includes("← назад"), "переход по замене с возвратом");
