@@ -1101,8 +1101,12 @@ export default function App() {
     const res = await shareOrDownload(backupName("json"), backupJSON());
     if (res === "downloaded") say("Файл сохранён в загрузки");
     else if (res === "copied") say("Файл не поддерживается — копия в буфере обмена");
-    else if (res === "failed") { setExportText(backupJSON()); say("Скопируй текст вручную"); }
+    else if (res === "failed") { setShowSettings(false); setExportText(backupJSON()); say("Скопируй текст вручную"); }
   };
+
+  /* Панель настроек рисуется поверх остальных листов, поэтому её нужно
+     закрыть, иначе открытый из неё лист окажется под ней и не нажмётся. */
+  const openImport = () => { setShowSettings(false); setImportError(null); setImportText(""); };
 
   const pickBackupFile = async (e) => {
     const f = e.target.files?.[0];
@@ -1200,8 +1204,8 @@ export default function App() {
             </span>
           </div>
           <button onClick={saveBackupFile} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Share2 size={15} /> Сохранить копию файлом</button>
-          <button onClick={async () => { try { await navigator.clipboard.writeText(backupJSON()); say("Копия в буфере обмена"); } catch { setExportText(backupJSON()); } }} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Copy size={15} /> Скопировать копию текстом</button>
-          <button onClick={() => { setImportText(""); setImportError(null); }} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Upload size={15} /> Восстановить из копии</button>
+          <button onClick={async () => { try { await navigator.clipboard.writeText(backupJSON()); say("Копия в буфере обмена"); } catch { setShowSettings(false); setExportText(backupJSON()); } }} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Copy size={15} /> Скопировать копию текстом</button>
+          <button onClick={openImport} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Upload size={15} /> Восстановить из копии</button>
           <button onClick={() => { setDays(DEFAULT_DAYS); setShowSettings(false); say("Дни возвращены к исходным"); }} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><RotateCcw size={15} /> Сбросить дни к исходным</button>
           <button onClick={wipe} className="f-body w-full rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.red, border: `1px solid ${C.line}` }}><Trash2 size={15} /> Удалить все записи</button>
           <button onClick={() => setShowSettings(false)} className="f-body w-full mt-2 py-3 text-sm" style={{ color: C.dim }}>Закрыть</button>
