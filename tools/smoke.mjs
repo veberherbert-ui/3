@@ -52,6 +52,12 @@ await page.waitForTimeout(1200);
 
 section("Загрузка и вкладки");
 ok((await page.title()) === "Железный дневник", "заголовок страницы");
+
+/* экран первого запуска с ограничениями */
+ok(await page.getByText("Это не медицина").isVisible(), "показан экран с ограничениями");
+await page.getByRole("button", { name: /Понятно, начать/ }).click();
+await page.waitForTimeout(700);
+ok(!(await page.getByText("Это не медицина").isVisible().catch(() => false)), "после принятия экран не мешает");
 for (const t of ["Сессия", "Журнал", "Графики", "База", "Тело"]) {
   await tab(t);
   ok(await page.getByRole("button", { name: t, exact: true }).isVisible(), `вкладка «${t}» открывается`);
