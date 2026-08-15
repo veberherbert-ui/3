@@ -1,7 +1,7 @@
 /* Все расчёты приложения: тоннаж, рекорды, одноповторный максимум,
    состав тела и энергозатраты. Чистые функции — без состояния и без DOM. */
 
-import { BW_SHARE } from "../data/exercises.js";
+import { BW_SHARE, BW_STATIC } from "../data/exercises.js";
 
 export const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -26,27 +26,39 @@ export const ytLink = (n) =>
  */
 export const exTonnage = (ex, bodyKg = 0) => {
   const mult = ex.uni ? 2 : 1;
-  if (ex.bodyweight) {
-    const share = BW_SHARE[ex.name];
-    if (!share || !bodyKg) return 0;
-    return Math.round(ex.sets.reduce((s, x) => s + (+x.reps || 0), 0) * bodyKg * share) * mult;
-  }
-  return ex.sets.reduce((s, x) => s + (+x.reps || 0) * (+x.weight || 0), 0) * mult;
+  const own = ex.bodyweight ? bwKg(ex.name, bodyKg) || 0 : 0;
+  /* Для упражнения со своим весом в поле веса лежит утяжеление — блин на поясе
+     или гантель между стоп. К своему весу оно прибавляется, а не заменяет его. */
+  return Math.round(ex.sets.reduce((s, x) => s + (+x.reps || 0) * (own + (+x.weight || 0)), 0)) * mult;
 };
 
 export const workoutTonnage = (w, bodyKg = 0) =>
   w.exercises.reduce((s, ex) => s + exTonnage(ex, bodyKg), 0);
 
-/** Сколько килограммов приходится на одно повторение упражнения со своим весом. */
+/** Своя часть веса в упражнении со своим весом, кг на повторение. */
 export const bwKg = (name, bodyKg) => {
   const share = BW_SHARE[name];
   return share && bodyKg ? Math.round(bodyKg * share) : null;
 };
 
-/** Максимальный вес в упражнении. null — если своим весом или подходов нет. */
+/** Наибольшее утяжеление в упражнении, кг. */
+export const addedKg = (ex) => (ex.sets.length ? Math.max(...ex.sets.map((s) => +s.weight || 0)) : 0);
+
+/**
+ * Рабочий вес упражнения — то, по чему видно прогресс.
+ * Своим весом это утяжеление: подтягивания растут не повторениями без конца,
+ * а блином на поясе. Без утяжеления прогресса по весу нет — null.
+ */
 export const topWeight = (ex) => {
-  if (ex.bodyweight || !ex.sets.length) return null;
-  return Math.max(...ex.sets.map((s) => +s.weight || 0));
+  if (!ex.sets.length) return null;
+  const m = addedKg(ex);
+  return ex.bodyweight ? m || null : m;
+};
+
+/** Полная нагрузка на одно повторение: свой вес плюс утяжеление. */
+export const perRepKg = (ex, bodyKg = 0) => {
+  const total = (ex.bodyweight ? bwKg(ex.name, bodyKg) || 0 : 0) + addedKg(ex);
+  return total || null;
 };
 
 export const topReps = (ex) => (ex.sets.length ? Math.max(...ex.sets.map((s) => +s.reps || 0)) : 0);
@@ -72,9 +84,11 @@ export function est1RM(ex) {
   return best ? r1(best) : null;
 }
 
-/** Верх диапазона выбит во всех подходах — пора добавлять вес. */
+/* Верх диапазона выбит во всех подходах — пора добавлять вес.
+   Своим весом это тоже работает: двенадцать подтягиваний в каждом подходе —
+   повод надеть пояс. Кроме статики, где в повторениях лежат секунды. */
 export const readyToAdd = (ex) =>
-  !ex.bodyweight && ex.sets.length >= 2 && ex.sets.every((s) => +s.reps >= 12);
+  !BW_STATIC.has(ex.name) && ex.sets.length >= 2 && ex.sets.every((s) => +s.reps >= 12);
 
 /* ============ состав тела ============ */
 

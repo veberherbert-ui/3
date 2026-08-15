@@ -9,7 +9,7 @@ import { C, plateColor } from "./lib/theme.js";
 import { today, daysAgo, fmtDate } from "./lib/dates.js";
 import {
   uid, r1, ytLink,
-  exTonnage, workoutTonnage, bwKg, weightNear, topWeight, topReps, totalReps,
+  exTonnage, workoutTonnage, bwKg, addedKg, perRepKg, weightNear, topWeight, topReps, totalReps,
   epley, brzycki, est1RM, readyToAdd,
   bodyFatNavy, bmiOf, lbmOf, ffmiOf,
 } from "./lib/calc.js";
@@ -326,6 +326,14 @@ function lastExerciseOf(workouts, name) {
 }
 
 /** Заготовка упражнения: число подходов и веса берутся из прошлого раза. */
+/* Вес подхода при сохранении. Своим весом поле означает утяжеление
+   и остаётся пустым, если его не было, — тогда пишем null, а не ноль:
+   ноль в записи выглядит как «поднял ноль килограммов». */
+function setWeight(ex, set) {
+  if (!ex.bodyweight) return +set.weight;
+  return set.weight === "" || set.weight == null ? null : +set.weight;
+}
+
 function draftExercise(name, workouts) {
   const prev = lastExerciseOf(workouts, name);
   const bw = isBW(name);
@@ -336,7 +344,7 @@ function draftExercise(name, workouts) {
     uni: isUni(name),
     sets: Array.from({ length: nSets }, (_, i) => ({
       reps: "",
-      weight: bw ? null : prev?.ex.sets[i]?.weight ?? prev?.ex.sets[0]?.weight ?? "",
+      weight: prev?.ex.sets[i]?.weight ?? prev?.ex.sets[0]?.weight ?? "",
       done: false,
     })),
   };
@@ -468,7 +476,9 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
 
   const lastFor = useCallback((name) => lastExerciseOf(workouts, name), [workouts]);
 
-  const setsLine = (ex) => ex.sets.map((s) => (ex.bodyweight ? s.reps : `${s.reps}×${s.weight}`)).join(" · ");
+  /* «8×60» — восемь по шестьдесят; «8+10» — восемь своим весом с блином
+     на десять; просто «8» — восемь без утяжеления. */
+  const setsLine = (ex) => ex.sets.map((s) => (ex.bodyweight ? (+s.weight ? `${s.reps}+${s.weight}` : s.reps) : `${s.reps}×${s.weight}`)).join(" · ");
 
   const blankExercise = useCallback((n) => draftExercise(n, workouts), [workouts]);
 
@@ -516,7 +526,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
                 <button onClick={() => toggle(n)} className="flex-1 text-left min-w-0">
                   <div className="f-body text-sm" style={{ color: on ? C.chalk : C.dim }}>{n}{isUni(n) && <UniTag />}<RiskMark name={n} conditions={conditions} /></div>
                   {prev && <div className="f-num text-2xs truncate" style={{ color: C.dim }}>{fmtDate(prev.date)}: {setsLine(prev.ex)}</div>}
-                  {up && <div className="f-body text-2xs" style={{ color: C.mustard }}>выбил верх диапазона — пробуй +2.5 кг</div>}
+                  {up && <div className="f-body text-2xs" style={{ color: C.mustard }}>{isBW(n) ? "выбил верх диапазона — пробуй с утяжелением" : "выбил верх диапазона — пробуй +2.5 кг"}</div>}
                 </button>
                 <button onClick={() => setInfo(n)} aria-label={`Об упражнении «${n}»`} className="shrink-0 flex items-center justify-center"><Info size={18} color={C.dim} /></button>
               </div>
@@ -581,7 +591,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
   const finish = () => {
     const cleaned = session.exercises.map((e) => ({
       name: e.name, bodyweight: e.bodyweight, uni: !!e.uni,
-      sets: e.sets.filter((s) => s.reps !== "" && (e.bodyweight || s.weight !== "")).map((s) => ({ reps: +s.reps, weight: e.bodyweight ? null : +s.weight })),
+      sets: e.sets.filter((s) => s.reps !== "" && (e.bodyweight || s.weight !== "")).map((s) => ({ reps: +s.reps, weight: setWeight(e, s) })),
     })).filter((e) => e.sets.length);
     setMenu(false);
     if (!cleaned.length) { setSession(null); return; }
@@ -645,10 +655,14 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
                   <div key={j} className="flex items-center gap-2">
                     <span className="f-num text-xs w-3" style={{ color: C.dim }}>{j + 1}</span>
                     <input type="number" inputMode="numeric" placeholder="повт" aria-label={`${ex.name}, подход ${j + 1}: повторения`} value={s.reps} onChange={(e) => upd(i, j, "reps", e.target.value)} className="f-num flex-1 rounded-lg px-2 py-1.5 text-sm text-center min-w-0" style={{ background: C.surfaceHi, color: s.done ? C.moss : C.chalk, border: `1px solid ${C.line}` }} />
-                    {!ex.bodyweight && (<>
-                      <span className="f-body text-xs" aria-hidden="true" style={{ color: C.dim }}>×</span>
-                      <input type="number" inputMode="decimal" placeholder="кг" aria-label={`${ex.name}, подход ${j + 1}: вес в килограммах`} value={s.weight ?? ""} onChange={(e) => upd(i, j, "weight", e.target.value)} className="f-num flex-1 rounded-lg px-2 py-1.5 text-sm text-center min-w-0" style={{ background: C.surfaceHi, color: s.done ? C.moss : C.chalk, border: `1px solid ${C.line}` }} />
-                    </>)}
+                    {/* Своим весом поле не прячем: подтягивания делают и с блином
+                        на поясе, икры — с гантелью. Пустое поле значит «без утяжеления». */}
+                    <span className="f-body text-xs" aria-hidden="true" style={{ color: C.dim }}>{ex.bodyweight ? "+" : "×"}</span>
+                    <input type="number" inputMode="decimal" placeholder={ex.bodyweight ? "+кг" : "кг"}
+                      aria-label={`${ex.name}, подход ${j + 1}: ${ex.bodyweight ? "утяжеление в килограммах" : "вес в килограммах"}`}
+                      value={s.weight ?? ""} onChange={(e) => upd(i, j, "weight", e.target.value)}
+                      className="f-num flex-1 rounded-lg px-2 py-1.5 text-sm text-center min-w-0"
+                      style={{ background: C.surfaceHi, color: s.done ? C.moss : C.chalk, border: `1px solid ${C.line}` }} />
                     <button onClick={() => markDone(i, j)} aria-label={`Подход ${j + 1}: ${s.done ? "снять отметку" : "выполнен"}`} aria-pressed={!!s.done} className="shrink-0 rounded-lg flex items-center justify-center" style={{ background: s.done ? C.moss : C.surfaceHi, border: `1px solid ${s.done ? C.moss : C.line}` }}>
                       <Check size={20} color={s.done ? C.chalk : C.dim} />
                     </button>
@@ -930,7 +944,7 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
     const ex = [...d.exercises];
     const e = { ...ex[i] };
     const last = e.sets[e.sets.length - 1] || { reps: 8, weight: 0 };
-    e.sets = [...e.sets, { reps: last.reps, weight: e.bodyweight ? null : last.weight }];
+    e.sets = [...e.sets, { reps: last.reps, weight: last.weight }];
     ex[i] = e;
     return { ...d, exercises: ex };
   });
@@ -950,7 +964,7 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
         ...e,
         sets: e.sets
           .filter((s) => s.reps !== "" && s.reps != null && (e.bodyweight || (s.weight !== "" && s.weight != null)))
-          .map((s) => ({ reps: +s.reps, weight: e.bodyweight ? null : +s.weight })),
+          .map((s) => ({ reps: +s.reps, weight: setWeight(e, s) })),
       }))
       .filter((e) => e.sets.length);
     onSave({ ...draft, exercises });
@@ -995,10 +1009,11 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
                 <div key={j} className="flex items-center gap-2">
                   <span className="f-num text-xs w-3" style={{ color: C.dim }}>{j + 1}</span>
                   <input type="number" inputMode="numeric" value={s.reps ?? ""} onChange={(e) => updSet(i, j, "reps", e.target.value)} placeholder="повт" aria-label={`${ex.name}, подход ${j + 1}: повторения`} className="f-num flex-1 rounded-lg px-2 py-1.5 text-sm text-center min-w-0" style={inp} />
-                  {!ex.bodyweight && (<>
-                    <span className="f-body text-xs" aria-hidden="true" style={{ color: C.dim }}>×</span>
-                    <input type="number" inputMode="decimal" value={s.weight ?? ""} onChange={(e) => updSet(i, j, "weight", e.target.value)} placeholder="кг" aria-label={`${ex.name}, подход ${j + 1}: вес в килограммах`} className="f-num flex-1 rounded-lg px-2 py-1.5 text-sm text-center min-w-0" style={inp} />
-                  </>)}
+                  <span className="f-body text-xs" aria-hidden="true" style={{ color: C.dim }}>{ex.bodyweight ? "+" : "×"}</span>
+                  <input type="number" inputMode="decimal" value={s.weight ?? ""} onChange={(e) => updSet(i, j, "weight", e.target.value)}
+                    placeholder={ex.bodyweight ? "+кг" : "кг"}
+                    aria-label={`${ex.name}, подход ${j + 1}: ${ex.bodyweight ? "утяжеление в килограммах" : "вес в килограммах"}`}
+                    className="f-num flex-1 rounded-lg px-2 py-1.5 text-sm text-center min-w-0" style={inp} />
                   <button onClick={() => rmSet(i, j)} aria-label={`Удалить подход ${j + 1}`} className="shrink-0 rounded-lg flex items-center justify-center" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
                     <X size={14} color={C.dim} />
                   </button>
@@ -1065,7 +1080,7 @@ function WorkoutCard({ w, isPR, onDelete, onEdit, bodyAt }) {
           </div>
         </div>
         <div className="flex w-full h-2 rounded-full overflow-hidden mt-2.5" style={{ background: C.line }}>
-          {w.exercises.filter((e) => exTonnage(e, body) > 0).map((e, i) => <div key={i} style={{ width: `${(exTonnage(e, body) / (t || 1)) * 100}%`, background: plateColor(topWeight(e) ?? bwKg(e.name, body)) }} />)}
+          {w.exercises.filter((e) => exTonnage(e, body) > 0).map((e, i) => <div key={i} style={{ width: `${(exTonnage(e, body) / (t || 1)) * 100}%`, background: plateColor(perRepKg(e, body)) }} />)}
         </div>
       </button>
       {open && (
@@ -1074,10 +1089,14 @@ function WorkoutCard({ w, isPR, onDelete, onEdit, bodyAt }) {
             <div key={i} className="flex items-start justify-between gap-3 text-xs f-body py-1.5" style={{ borderTop: `1px solid ${C.line}` }}>
               <span style={{ color: C.chalk }}>{ex.name}{ex.uni && <UniTag />}</span>
               <span className="f-num text-right shrink-0" style={{ color: C.dim }}>
-                {ex.sets.map((s) => (ex.bodyweight ? s.reps : `${s.reps}×${s.weight}`)).join(" · ")}
+                {ex.sets.map((s) => (ex.bodyweight ? (+s.weight ? `${s.reps}+${s.weight}` : s.reps) : `${s.reps}×${s.weight}`)).join(" · ")}
                 {/* Своим весом непонятно, откуда взялись килограммы в тоннаже —
                     подписываем, во что оценён один повтор. */}
-                {ex.bodyweight && bwKg(ex.name, body) && <span className="f-body block text-2xs">×{bwKg(ex.name, body)} кг своим весом</span>}
+                {ex.bodyweight && bwKg(ex.name, body) && (
+                  <span className="f-body block text-2xs">
+                    свой вес ~{bwKg(ex.name, body)} кг{addedKg(ex) ? ` + ${addedKg(ex)} кг` : ""}
+                  </span>
+                )}
               </span>
             </div>
           ))}
@@ -1796,9 +1815,10 @@ export default function App() {
     [...workouts].sort((a, b) => a.date.localeCompare(b.date)).forEach((w) => {
       lines.push("", `### ${w.date} — ${w.dayLabel} — тоннаж ${workoutTonnage(w, bodyAt(w.date))} кг${w.durationMin ? `, ${w.durationMin} мин` : ""}`);
       w.exercises.forEach((ex) => {
-        const s = ex.sets.map((x) => (ex.bodyweight ? `${x.reps}` : `${x.reps}×${x.weight}`)).join(", ");
+        const s = ex.sets.map((x) => (ex.bodyweight ? (+x.weight ? `${x.reps}+${x.weight}кг` : `${x.reps}`) : `${x.reps}×${x.weight}`)).join(", ");
         const rm = est1RM(ex);
-        lines.push(`- ${ex.name}${ex.uni ? " [каждой стороной]" : ""}: ${s}${rm ? ` (расч.1ПМ ${rm})` : ""}`);
+        const own = ex.bodyweight ? bwKg(ex.name, bodyAt(w.date)) : null;
+        lines.push(`- ${ex.name}${ex.uni ? " [каждой стороной]" : ""}: ${s}${own ? ` [свой вес ~${own} кг]` : ""}${rm ? ` (расч.1ПМ ${rm})` : ""}`);
       });
       if (w.note) lines.push(`- заметка: ${w.note}`);
     });

@@ -203,8 +203,11 @@ const past = def.slice(0, 8) + "05";
 await dateField.fill(past);
 await page.getByPlaceholder("повт").first().fill("8");
 await page.getByPlaceholder("кг").first().fill("70");
-/* Подтягивания заодно: проверим, что свой вес попадает в тоннаж. */
-await page.getByRole("spinbutton", { name: /Подтягивания \(обычный хват\), подход 1/ }).fill("8");
+/* Подтягивания заодно: свой вес плюс блин на поясе. */
+await page.getByRole("spinbutton", { name: /Подтягивания \(обычный хват\), подход 1: повторения/ }).fill("8");
+const beltField = page.getByRole("spinbutton", { name: /Подтягивания \(обычный хват\), подход 1: утяжеление/ });
+ok(await beltField.isVisible(), "у упражнения со своим весом есть поле утяжеления");
+await beltField.fill("10");
 await page.getByRole("button", { name: /Записать в журнал/ }).click();
 await page.waitForTimeout(1100);
 const list = await dbRead("workouts");
@@ -217,10 +220,17 @@ ok(list?.length === 2, "прежняя запись на месте");
    просто исчезали из статистики. Теперь считаются по доле веса тела. */
 const bwCard = page.locator("div.rounded-xl").filter({ hasText: "Спина + Задняя дельта" }).first();
 const bwTons = +((await bwCard.innerText()).match(/([\d\s\u00a0\u202f]+)\s*кг/)?.[1] || "0").replace(/[^\d]/g, "");
-ok(bwTons > 560, "подтягивания попадают в тоннаж", `${bwTons} кг против 560 без своего веса`);
+/* 560 за тягу штангой + 8 × (78 + 10) своим весом с поясом. Свой вес
+   округляется до килограмма на повторение — ровно так, как подписано
+   в карточке, чтобы цифра сходилась с тем, что видно глазами. */
+const perRep = Math.round(82 * 0.95) + 10;
+ok(bwTons === 560 + 8 * perRep, "тоннаж = штанга + свой вес + утяжеление", `${bwTons} = 560 + 8 × ${perRep}`);
 await bwCard.getByText("Спина + Задняя дельта").click();
 await page.waitForTimeout(400);
-ok((await bwCard.innerText()).includes("своим весом"), "видно, во что оценён повтор своим весом");
+const bwText = await bwCard.innerText();
+ok(bwText.includes("свой вес ~78 кг"), "видно, во что оценён свой вес");
+ok(bwText.includes("+ 10 кг"), "видно утяжеление");
+ok(bwText.includes("8+10"), "подход записан как повторения плюс утяжеление");
 
 section("Расход за тренировку");
 await tab("Тело");
