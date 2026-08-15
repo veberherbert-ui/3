@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue, lazy, Suspense } from "react";
 import { Plus, X, TrendingUp, BookOpen, Dumbbell, Flame, Settings, Trash2, Check, Info, Play, Timer, Calculator, Copy, ExternalLink, Activity, Pause, ChevronDown, ChevronUp, MoreHorizontal, Search, Library, Layers, Pencil, RotateCcw, Download, Upload, Share2, HardDrive, ShieldAlert, TriangleAlert, HeartPulse, Repeat2, Volume2, VolumeX, RefreshCw, FileText, Type, CalendarPlus, Tag } from "lucide-react";
 
-import { EXDB, GROUPS, ALL_MUSCLES, PUSH_M, PULL_M, PRESETS, DEFAULT_DAYS, isUni, isBW, isPair } from "./data/exercises.js";
+import { EXDB, GROUPS, ALL_MUSCLES, PUSH_M, PULL_M, PRESETS, DEFAULT_DAYS, isUni, isBW, COUNT_MODES, defaultCount, flagsOfCount, countOfFlags, canCount } from "./data/exercises.js";
 import { CONDITIONS, CONDITION_BY_ID, helpfulNote } from "./data/conditions.js";
 import { TECHNIQUE } from "./data/technique.js";
 import { TAGS, TAG_BY_ID, tagLine } from "./data/tags.js";
@@ -339,15 +339,14 @@ function setWeight(ex, set) {
   return set.weight === "" || set.weight == null ? null : +set.weight;
 }
 
-function draftExercise(name, workouts) {
+function draftExercise(name, workouts, modes = {}) {
   const prev = lastExerciseOf(workouts, name);
   const bw = isBW(name);
   const nSets = prev ? prev.ex.sets.length : 3;
   return {
     name,
     bodyweight: bw,
-    uni: isUni(name),
-    pair: isPair(name),
+    ...flagsOfCount(modes[name] || defaultCount(name)),
     sets: Array.from({ length: nSets }, (_, i) => ({
       reps: "",
       weight: prev?.ex.sets[i]?.weight ?? prev?.ex.sets[0]?.weight ?? "",
@@ -457,6 +456,36 @@ function TagPicker({ tags = [], onToggle }) {
   );
 }
 
+/* Как считать вес: один снаряд, два сразу или по очереди.
+
+   Показывается только там, где ответ неочевиден — гантели, блоки,
+   тренажёры. У штанги снаряд всегда один, и спрашивать не о чем.
+   Выбор запоминается для упражнения и подставляется в следующий раз. */
+function CountPicker({ name, mode, onPick }) {
+  const [open, setOpen] = useState(false);
+  if (!canCount(name)) return null;
+  const cur = COUNT_MODES.find((m) => m.id === mode) || COUNT_MODES[0];
+  return (
+    <div>
+      <button onClick={() => setOpen((v) => !v)} className="tap-inline f-body text-2xs flex items-center gap-1 text-left py-0.5"
+        style={{ color: mode === "single" ? C.dim : C.blueText }}>
+        {cur.label} — {cur.hint} {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+      </button>
+      {open && (
+        <div className="flex flex-wrap gap-1.5 mt-1 mb-1">
+          {COUNT_MODES.map((m) => (
+            <button key={m.id} onClick={() => { onPick(m.id); setOpen(false); }} aria-pressed={m.id === mode}
+              className="tap-inline f-body text-xs rounded-full px-2.5 py-1.5"
+              style={{ background: m.id === mode ? C.blue : C.surfaceHi, color: m.id === mode ? C.chalk : C.dim, border: `1px solid ${m.id === mode ? C.blue : C.line}` }}>
+              {m.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* Отдых считается от метки времени в самой сессии, а сессия сохраняется —
    поэтому таймер переживает сворачивание и перезапуск приложения. */
 
@@ -524,7 +553,7 @@ function RestBar({ rest, onDone, onAdjust, onSkip, muted }) {
   );
 }
 
-function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, conditions, restOverrides, setRestOverride, muted, bodyAt }) {
+function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, conditions, restOverrides, setRestOverride, muted, bodyAt, countModes, setCountMode }) {
   const [pickDay, setPickDay] = useState(days[0]?.id);
   const [picked, setPicked] = useState([]);
   const [custom, setCustom] = useState("");
@@ -557,7 +586,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
      на десять; просто «8» — восемь без утяжеления. */
   const setsLine = (ex) => ex.sets.map((s) => (ex.bodyweight ? (+s.weight ? `${s.reps}+${s.weight}` : s.reps) : `${s.reps}×${s.weight}`)).join(" · ");
 
-  const blankExercise = useCallback((n) => draftExercise(n, workouts), [workouts]);
+  const blankExercise = useCallback((n) => draftExercise(n, workouts, countModes), [workouts, countModes]);
 
   /** Последняя тренировка этого дня — для кнопки «повторить». */
   const lastWorkoutOfDay = useMemo(() => {
@@ -679,6 +708,17 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
     e.sets = [...e.sets, { reps: "", weight: last.weight, done: false, sec: null }]; ex[i] = e; return { ...s, exercises: ex };
   });
   const rmExercise = (i) => setSession((s) => ({ ...s, exercises: s.exercises.filter((_, k) => k !== i) }));
+  /* Смена режима счёта: правит текущую тренировку и запоминается
+     как умолчание для этого упражнения. */
+  const setMode = (i, mode) => {
+    const name = session.exercises[i].name;
+    setCountMode?.(name, mode);
+    setSession((s) => {
+      const list = [...s.exercises];
+      list[i] = { ...list[i], ...flagsOfCount(mode) };
+      return { ...s, exercises: list };
+    });
+  };
   const toggleTag = (i, id) => setSession((s) => {
     const list = [...s.exercises];
     const cur = list[i].tags || [];
@@ -752,8 +792,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
               <div className="flex items-start justify-between gap-2 mb-2">
                 <div className="min-w-0">
                   <div className="f-body text-sm font-medium" style={{ color: C.chalk }}>{ex.name}{ex.uni && <UniTag />}{ex.pair && <PairTag />}<RiskMark name={ex.name} conditions={conditions} /></div>
-                  {ex.uni && <div className="f-body text-2xs" style={{ color: C.blueText }}>вводи один подход — считается за обе стороны</div>}
-                  {ex.pair && <div className="f-body text-2xs" style={{ color: C.dim }}>вес одной гантели — тоннаж считается за две</div>}
+                  <CountPicker name={ex.name} mode={countOfFlags(ex)} onPick={(m) => setMode(i, m)} />
                   {prev && <div className="f-num text-2xs truncate" style={{ color: C.dim }}>прошлый раз: {setsLine(prev.ex)}</div>}
                   <div className="f-body text-2xs flex items-center gap-1 mt-0.5" style={{ color: C.dim }}>
                     <Timer size={10} /> отдых {fmtRest(restFor(ex.name, restOverrides))}
@@ -1048,7 +1087,7 @@ function BaseTab({ days, setDays, initialView, conditions }) {
  * Форма тренировки: правка записанной и запись задним числом — одно и то же.
  * Разница только в заголовке и в том, куда уходит результат.
  */
-function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [], isNew = false, bodyAt }) {
+function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [], isNew = false, bodyAt, countModes = {}, setCountMode }) {
   const [adding, setAdding] = useState(false);
   /* работаем на копии — «Отмена» должна оставлять запись нетронутой */
   const [draft, setDraft] = useState(() => ({
@@ -1078,6 +1117,14 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
     return { ...d, exercises: ex };
   });
   const rmExercise = (i) => setDraft((d) => ({ ...d, exercises: d.exercises.filter((_, k) => k !== i) }));
+  const setMode = (i, mode) => {
+    setCountMode?.(draft.exercises[i].name, mode);
+    setDraft((d) => {
+      const ex = [...d.exercises];
+      ex[i] = { ...ex[i], ...flagsOfCount(mode) };
+      return { ...d, exercises: ex };
+    });
+  };
   const toggleTag = (i, id) => setDraft((d) => {
     const ex = [...d.exercises];
     const cur = ex[i].tags || [];
@@ -1085,7 +1132,7 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
     return { ...d, exercises: ex };
   });
   const addExercise = (n) =>
-    setDraft((d) => (d.exercises.some((e) => e.name === n) ? d : { ...d, exercises: [...d.exercises, draftExercise(n, workouts)] }));
+    setDraft((d) => (d.exercises.some((e) => e.name === n) ? d : { ...d, exercises: [...d.exercises, draftExercise(n, workouts, countModes)] }));
 
   /* пустые поля и подходы отбрасываем, иначе в статистику попадут нули */
   const save = () => {
@@ -1131,7 +1178,10 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
         {draft.exercises.map((ex, i) => (
           <div key={i} className="rounded-xl p-3" style={{ background: C.surfaceHi, border: `1px solid ${C.line}` }}>
             <div className="flex items-start justify-between gap-2 mb-2">
-              <div className="f-body text-sm min-w-0" style={{ color: C.chalk }}>{ex.name}{ex.uni && <UniTag />}{ex.pair && <PairTag />}</div>
+              <div className="min-w-0">
+                <div className="f-body text-sm" style={{ color: C.chalk }}>{ex.name}{ex.uni && <UniTag />}{ex.pair && <PairTag />}</div>
+                <CountPicker name={ex.name} mode={countOfFlags(ex)} onPick={(m) => setMode(i, m)} />
+              </div>
               <button onClick={() => rmExercise(i)} aria-label={`Убрать «${ex.name}» из записи`} className="shrink-0 flex items-center justify-center"><Trash2 size={16} color={C.dim} /></button>
             </div>
             <div className="space-y-1.5">
@@ -1252,7 +1302,7 @@ function WorkoutCard({ w, isPR, onDelete, onEdit, bodyAt }) {
   );
 }
 
-function JournalTab({ workouts, onDelete, onExport, onUpdate, onAdd, days, conditions, bodyAt }) {
+function JournalTab({ workouts, onDelete, onExport, onUpdate, onAdd, days, conditions, bodyAt, countModes, setCountMode }) {
   const [editing, setEditing] = useState(null);
   /* запись задним числом: сначала выбираем день, потом заполняем ту же форму */
   const [pickDay, setPickDay] = useState(false);
@@ -1267,7 +1317,7 @@ function JournalTab({ workouts, onDelete, onExport, onUpdate, onAdd, days, condi
       dayLabel: day?.name || "Своя тренировка",
       note: "",
       durationMin: null,
-      exercises: (day?.exercises || []).map((n) => draftExercise(n, workouts)),
+      exercises: (day?.exercises || []).map((n) => draftExercise(n, workouts, countModes)),
     });
   };
 
@@ -1332,6 +1382,8 @@ function JournalTab({ workouts, onDelete, onExport, onUpdate, onAdd, days, condi
           workouts={workouts}
           conditions={conditions}
           bodyAt={bodyAt}
+          countModes={countModes}
+          setCountMode={setCountMode}
           onClose={() => setEditing(null)}
           onSave={(w) => { onUpdate(w); setEditing(null); }}
         />
@@ -1367,6 +1419,8 @@ function JournalTab({ workouts, onDelete, onExport, onUpdate, onAdd, days, condi
           workouts={workouts}
           conditions={conditions}
           bodyAt={bodyAt}
+          countModes={countModes}
+          setCountMode={setCountMode}
           isNew
           onClose={() => setCreating(null)}
           onSave={(w) => { onAdd(w); setCreating(null); }}
@@ -1978,6 +2032,12 @@ export default function App() {
   useEffect(() => { if (!session) releaseAudio(); }, [session]);
 
   /** Правки времени отдыха, сделанные прямо на тренировке */
+  /* Как считать вес: выбор для упражнения запоминается и подставляется дальше. */
+  const countModes = useMemo(() => profile.countModes || {}, [profile.countModes]);
+  const setCountMode = useCallback((name, mode) => {
+    setProfile((p) => ({ ...p, countModes: { ...(p.countModes || {}), [name]: mode } }));
+  }, [setProfile]);
+
   const restOverrides = useMemo(() => profile.restOverrides || {}, [profile.restOverrides]);
   const setRestOverride = useCallback((name, sec) => {
     setProfile((p) => ({ ...p, restOverrides: { ...(p.restOverrides || {}), [name]: sec } }));
@@ -2077,8 +2137,8 @@ export default function App() {
 
       <div ref={scroller} className="flex-1 overflow-y-auto w-full max-w-xl mx-auto" role="tabpanel" id="tabpanel" aria-labelledby={`tab-${shownTab}`}>
         <div key={shownTab} className="tab-in">
-        {shownTab === "session" && <SessionTab session={session} setSession={setSession} workouts={workouts} days={days} onFinish={finishSession} goToDays={() => { setBaseView("days"); setTab("base"); }} conditions={conditions} restOverrides={restOverrides} setRestOverride={setRestOverride} muted={muted} bodyAt={bodyAt} />}
-        {shownTab === "journal" && <JournalTab workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} onUpdate={updateWorkout} onAdd={addWorkout} days={days} conditions={conditions} bodyAt={bodyAt} />}
+        {shownTab === "session" && <SessionTab session={session} setSession={setSession} workouts={workouts} days={days} onFinish={finishSession} goToDays={() => { setBaseView("days"); setTab("base"); }} conditions={conditions} restOverrides={restOverrides} setRestOverride={setRestOverride} muted={muted} bodyAt={bodyAt} countModes={countModes} setCountMode={setCountMode} />}
+        {shownTab === "journal" && <JournalTab workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} onUpdate={updateWorkout} onAdd={addWorkout} days={days} conditions={conditions} bodyAt={bodyAt} countModes={countModes} setCountMode={setCountMode} />}
         {shownTab === "progress" && <ProgressTab workouts={workouts} bodyAt={bodyAt} />}
         {shownTab === "base" && <BaseTab days={days} setDays={setDays} initialView={baseView} conditions={conditions} />}
         {shownTab === "body" && <BodyTab metrics={metrics} profile={profile} setProfile={setProfile} onAdd={addMetric} onDelete={deleteMetric} workouts={workouts} restOverrides={restOverrides} />}

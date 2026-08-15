@@ -104,6 +104,19 @@ const rests = (await page.locator("div.f-body").filter({ hasText: "отдых" }
   .filter(Boolean);
 ok(rests.length > 1 && new Set(rests).size > 1, "время отдыха различается по упражнениям", rests.join(", "));
 
+/* Как считать вес — решает человек, а не база: в одном зале кроссовер
+   с двумя стеками, в другом бабочка с одним. Выбор запоминается. */
+await page.getByRole("button", { name: /^два сразу —/ }).first().click();
+await page.waitForTimeout(400);
+await page.getByRole("button", { name: "один снаряд", exact: true }).first().click();
+await page.waitForTimeout(600);
+ok((await dbRead("profile"))?.countModes?.["Жим гантелей лёжа (горизонт)"] === "single",
+  "выбор счёта запоминается для упражнения");
+await page.getByRole("button", { name: /^один снаряд —/ }).first().click();
+await page.waitForTimeout(400);
+await page.getByRole("button", { name: "два сразу", exact: true }).first().click();
+await page.waitForTimeout(600);
+
 await page.getByPlaceholder("повт").first().fill("10");
 await page.getByPlaceholder("кг").first().fill("40");
 /* Подход теперь засекается: ▶ — начали, секундомер — идёт, второе нажатие
