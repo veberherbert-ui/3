@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue, lazy, Suspense } from "react";
-import { Plus, X, TrendingUp, BookOpen, Dumbbell, Flame, Settings, Trash2, Check, Info, Play, Timer, Calculator, Copy, ExternalLink, Activity, Pause, ChevronDown, ChevronUp, MoreHorizontal, Search, Library, Layers, Pencil, RotateCcw, Download, Upload, Share2, HardDrive, ShieldAlert, TriangleAlert, HeartPulse, Repeat2, Volume2, VolumeX, RefreshCw, FileText, Type, CalendarPlus } from "lucide-react";
+import { Plus, X, TrendingUp, BookOpen, Dumbbell, Flame, Settings, Trash2, Check, Info, Play, Timer, Calculator, Copy, ExternalLink, Activity, Pause, ChevronDown, ChevronUp, MoreHorizontal, Search, Library, Layers, Pencil, RotateCcw, Download, Upload, Share2, HardDrive, ShieldAlert, TriangleAlert, HeartPulse, Repeat2, Volume2, VolumeX, RefreshCw, FileText, Type, CalendarPlus, Tag } from "lucide-react";
 
-import { EXDB, GROUPS, ALL_MUSCLES, PUSH_M, PULL_M, PRESETS, DEFAULT_DAYS, isUni, isBW } from "./data/exercises.js";
+import { EXDB, GROUPS, ALL_MUSCLES, PUSH_M, PULL_M, PRESETS, DEFAULT_DAYS, isUni, isBW, isPair } from "./data/exercises.js";
 import { CONDITIONS, CONDITION_BY_ID, helpfulNote } from "./data/conditions.js";
 import { TECHNIQUE } from "./data/technique.js";
+import { TAGS, TAG_BY_ID, tagLine } from "./data/tags.js";
 import { saferAlternatives, worstRisk, risksFor, dayWarnings } from "./lib/swap.js";
 import { C, plateColor } from "./lib/theme.js";
 import { today, daysAgo, fmtDate } from "./lib/dates.js";
@@ -61,6 +62,10 @@ const CalcLine = ({ k, v, hint }) => (
 );
 const UniTag = () => (
   <span className="f-body text-2xs rounded px-1 py-0.5 ml-1 align-middle" style={{ background: C.blue, color: C.chalk }}>×2</span>
+);
+/* Две гантели: в поле веса стоит одна, тоннаж считается за обе. */
+const PairTag = () => (
+  <span className="f-body text-2xs rounded px-1 py-0.5 ml-1 align-middle" style={{ background: C.surfaceHi, color: C.dim, border: `1px solid ${C.line}` }}>пара</span>
 );
 
 /**
@@ -342,6 +347,7 @@ function draftExercise(name, workouts) {
     name,
     bodyweight: bw,
     uni: isUni(name),
+    pair: isPair(name),
     sets: Array.from({ length: nSets }, (_, i) => ({
       reps: "",
       weight: prev?.ex.sets[i]?.weight ?? prev?.ex.sets[0]?.weight ?? "",
@@ -376,6 +382,77 @@ function Elapsed({ session, doneSets, live }) {
       <div className="f-body text-xs mt-1" style={{ color: C.dim }}>
         {doneSets} подх. · {live.toLocaleString("ru-RU")} кг
       </div>
+    </div>
+  );
+}
+
+/* Кнопка подхода: ▶ — начать, секундомер — идёт, ✓ — сделан.
+
+   Раньше была просто галочка, и время под нагрузкой приходилось оценивать
+   по темпу — три секунды на повторение. Для подхода в отказ с паузами это
+   мимо вдвое, а от времени под нагрузкой зависит и плотность тренировки,
+   и расход калорий.
+
+   Кто не хочет возиться — жмёт дважды подряд: замер короче пяти секунд
+   не считается замером, и подход просто отмечается сделанным, как раньше.
+
+   Тикает здесь, а не в SessionTab: иначе каждую секунду перерисовывались бы
+   все упражнения вместе с полями ввода, и в них терялся бы курсор. */
+const SEC_MIN_MEASURED = 5;
+
+function SetButton({ set, index, exName, running, startedAt, onStart, onStop, onToggle }) {
+  useTicker(running);
+  const done = !!set.done;
+  const elapsed = running ? Math.floor((Date.now() - startedAt) / 1000) : 0;
+  const label = done
+    ? `${exName}, подход ${index + 1}: снять отметку`
+    : running
+      ? `${exName}, подход ${index + 1}: идёт ${elapsed} секунд, закончить`
+      : `${exName}, подход ${index + 1}: начать`;
+  const bg = done ? C.moss : running ? C.mustard : C.surfaceHi;
+  const line = done ? C.moss : running ? C.mustard : C.line;
+  return (
+    <button onClick={done ? onToggle : running ? onStop : onStart} aria-label={label} aria-pressed={done}
+      className="shrink-0 rounded-lg flex items-center justify-center px-1.5"
+      style={{ background: bg, border: `1px solid ${line}` }}>
+      {done ? <Check size={20} color={C.chalk} />
+        : running ? <span className="f-num text-xs font-semibold tabular-nums" style={{ color: C.bg }}>{fmtClock(elapsed * 1000)}</span>
+          : <Play size={18} color={C.dim} />}
+    </button>
+  );
+}
+
+/** Метки упражнения: как оно прошло, а не сколько было поднято. */
+function TagPicker({ tags = [], onToggle }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <button onClick={() => setOpen((v) => !v)} className="tap-inline f-body text-xs flex items-center gap-1 py-1.5" style={{ color: C.dim }}>
+          <Tag size={13} /> метки {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+        </button>
+        {!open && tags.map((id) => (
+          <span key={id} className="f-body text-2xs rounded-full px-2 py-0.5"
+            style={{ background: C.surfaceHi, color: TAG_BY_ID[id]?.warn ? C.redText : C.chalk, border: `1px solid ${C.line}` }}>
+            {TAG_BY_ID[id]?.label}
+          </span>
+        ))}
+      </div>
+      {open && (
+        <div className="flex flex-wrap gap-1.5 mt-1">
+          {TAGS.map((t) => {
+            const on = tags.includes(t.id);
+            const accent = t.warn ? C.red : C.blue;
+            return (
+              <button key={t.id} onClick={() => onToggle(t.id)} aria-pressed={on} title={t.hint}
+                className="tap-inline f-body text-xs rounded-full px-2.5 py-1.5"
+                style={{ background: on ? accent : C.surfaceHi, color: on ? C.chalk : C.dim, border: `1px solid ${on ? accent : C.line}` }}>
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -560,24 +637,58 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
     const ex = [...s.exercises]; const e = { ...ex[i], sets: [...ex[i].sets] };
     e.sets[j] = { ...e.sets[j], [f]: v }; ex[i] = e; return { ...s, exercises: ex };
   });
-  const markDone = (i, j) => {
-    const ex = session.exercises[i];
-    const s = ex.sets[j];
+  /* Начали подход: секундомер живёт в самой сессии, поэтому переживает
+     сворачивание приложения. Отдых на это время убираем — он кончился. */
+  const startSet = (i, j) => {
     tapBuzz();
-    if (!s.done && s.reps) {
-      /* касание пользователя — единственный момент, когда iOS разрешает включить звук */
-      primeAudio();
-      const total = restFor(ex.name, restOverrides);
-      setSession((prev) => ({ ...prev, rest: { until: Date.now() + total * 1000, total, exName: ex.name } }));
-    }
-    upd(i, j, "done", !s.done);
+    primeAudio(); /* касание пользователя — момент, когда iOS разрешает звук */
+    cancelScheduled();
+    setSession((s) => ({ ...s, rest: null, run: { i, j, at: Date.now() } }));
+  };
+
+  /** Отметить подход сделанным и запустить отдых. sec — замер, если он был. */
+  const finishSet = (i, j, sec) => {
+    const ex = session.exercises[i];
+    tapBuzz();
+    primeAudio();
+    const total = restFor(ex.name, restOverrides);
+    setSession((prev) => {
+      const list = [...prev.exercises];
+      const e = { ...list[i], sets: [...list[i].sets] };
+      e.sets[j] = { ...e.sets[j], done: true, sec: sec || null };
+      list[i] = e;
+      return { ...prev, exercises: list, run: null, rest: { until: Date.now() + total * 1000, total, exName: ex.name } };
+    });
+  };
+
+  /* Снять отметку: замер тоже убираем, иначе он останется от подхода,
+     который решили переделать. */
+  const untick = (i, j) => {
+    tapBuzz();
+    setSession((prev) => {
+      const list = [...prev.exercises];
+      const e = { ...list[i], sets: [...list[i].sets] };
+      e.sets[j] = { ...e.sets[j], done: false, sec: null };
+      list[i] = e;
+      return { ...prev, exercises: list };
+    });
   };
   const addSet = (i) => setSession((s) => {
     const ex = [...s.exercises]; const e = { ...ex[i] };
     const last = e.sets[e.sets.length - 1] || { reps: "", weight: "" };
-    e.sets = [...e.sets, { reps: "", weight: last.weight, done: false }]; ex[i] = e; return { ...s, exercises: ex };
+    e.sets = [...e.sets, { reps: "", weight: last.weight, done: false, sec: null }]; ex[i] = e; return { ...s, exercises: ex };
   });
   const rmExercise = (i) => setSession((s) => ({ ...s, exercises: s.exercises.filter((_, k) => k !== i) }));
+  const toggleTag = (i, id) => setSession((s) => {
+    const list = [...s.exercises];
+    const cur = list[i].tags || [];
+    list[i] = { ...list[i], tags: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] };
+    return { ...s, exercises: list };
+  });
+  const run = session.run;
+  /* Сумма замеров по упражнению. Пока ни один подход не засекали — ноль,
+     и строка не показывается: обещать точность, которой нет, незачем. */
+  const underLoad = (ex) => ex.sets.reduce((n, s) => n + (+s.sec || 0), 0);
   /* решил доделать что-то сверх плана — добавляем прямо на ходу */
   const addExercise = (n) => setSession((s) =>
     s.exercises.some((e) => e.name === n) ? s : { ...s, exercises: [...s.exercises, blankExercise(n)] });
@@ -590,8 +701,10 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
 
   const finish = () => {
     const cleaned = session.exercises.map((e) => ({
-      name: e.name, bodyweight: e.bodyweight, uni: !!e.uni,
-      sets: e.sets.filter((s) => s.reps !== "" && (e.bodyweight || s.weight !== "")).map((s) => ({ reps: +s.reps, weight: setWeight(e, s) })),
+      name: e.name, bodyweight: e.bodyweight, uni: !!e.uni, pair: !!e.pair,
+      tags: e.tags?.length ? e.tags : undefined,
+      sets: e.sets.filter((s) => s.reps !== "" && (e.bodyweight || s.weight !== ""))
+        .map((s) => ({ reps: +s.reps, weight: setWeight(e, s), sec: +s.sec > 0 ? +s.sec : undefined })),
     })).filter((e) => e.sets.length);
     setMenu(false);
     if (!cleaned.length) { setSession(null); return; }
@@ -638,11 +751,13 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
             <div key={i} className="rounded-xl p-3" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
               <div className="flex items-start justify-between gap-2 mb-2">
                 <div className="min-w-0">
-                  <div className="f-body text-sm font-medium" style={{ color: C.chalk }}>{ex.name}{ex.uni && <UniTag />}<RiskMark name={ex.name} conditions={conditions} /></div>
+                  <div className="f-body text-sm font-medium" style={{ color: C.chalk }}>{ex.name}{ex.uni && <UniTag />}{ex.pair && <PairTag />}<RiskMark name={ex.name} conditions={conditions} /></div>
                   {ex.uni && <div className="f-body text-2xs" style={{ color: C.blueText }}>вводи один подход — считается за обе стороны</div>}
+                  {ex.pair && <div className="f-body text-2xs" style={{ color: C.dim }}>вес одной гантели — тоннаж считается за две</div>}
                   {prev && <div className="f-num text-2xs truncate" style={{ color: C.dim }}>прошлый раз: {setsLine(prev.ex)}</div>}
                   <div className="f-body text-2xs flex items-center gap-1 mt-0.5" style={{ color: C.dim }}>
                     <Timer size={10} /> отдых {fmtRest(restFor(ex.name, restOverrides))}
+                    {underLoad(ex) > 0 && <span>· под нагрузкой {fmtRest(underLoad(ex))}</span>}
                   </div>
                 </div>
                 <div className="flex gap-1.5 shrink-0">
@@ -663,13 +778,22 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
                       value={s.weight ?? ""} onChange={(e) => upd(i, j, "weight", e.target.value)}
                       className="f-num flex-1 rounded-lg px-2 py-1.5 text-sm text-center min-w-0"
                       style={{ background: C.surfaceHi, color: s.done ? C.moss : C.chalk, border: `1px solid ${C.line}` }} />
-                    <button onClick={() => markDone(i, j)} aria-label={`Подход ${j + 1}: ${s.done ? "снять отметку" : "выполнен"}`} aria-pressed={!!s.done} className="shrink-0 rounded-lg flex items-center justify-center" style={{ background: s.done ? C.moss : C.surfaceHi, border: `1px solid ${s.done ? C.moss : C.line}` }}>
-                      <Check size={20} color={s.done ? C.chalk : C.dim} />
-                    </button>
+                    <SetButton
+                      set={s} index={j} exName={ex.name}
+                      running={run?.i === i && run?.j === j}
+                      startedAt={run?.at}
+                      onStart={() => startSet(i, j)}
+                      onStop={() => {
+                        const sec = Math.round((Date.now() - run.at) / 1000);
+                        finishSet(i, j, sec >= SEC_MIN_MEASURED ? sec : null);
+                      }}
+                      onToggle={() => untick(i, j)}
+                    />
                   </div>
                 ))}
               </div>
               <button onClick={() => addSet(i)} className="f-body mt-2 text-xs" style={{ color: C.mossText }}>+ подход</button>
+              <TagPicker tags={ex.tags} onToggle={(id) => toggleTag(i, id)} />
             </div>
           );
         })}
@@ -954,6 +1078,12 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
     return { ...d, exercises: ex };
   });
   const rmExercise = (i) => setDraft((d) => ({ ...d, exercises: d.exercises.filter((_, k) => k !== i) }));
+  const toggleTag = (i, id) => setDraft((d) => {
+    const ex = [...d.exercises];
+    const cur = ex[i].tags || [];
+    ex[i] = { ...ex[i], tags: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] };
+    return { ...d, exercises: ex };
+  });
   const addExercise = (n) =>
     setDraft((d) => (d.exercises.some((e) => e.name === n) ? d : { ...d, exercises: [...d.exercises, draftExercise(n, workouts)] }));
 
@@ -964,7 +1094,7 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
         ...e,
         sets: e.sets
           .filter((s) => s.reps !== "" && s.reps != null && (e.bodyweight || (s.weight !== "" && s.weight != null)))
-          .map((s) => ({ reps: +s.reps, weight: setWeight(e, s) })),
+          .map((s) => ({ reps: +s.reps, weight: setWeight(e, s), sec: +s.sec > 0 ? +s.sec : undefined })),
       }))
       .filter((e) => e.sets.length);
     onSave({ ...draft, exercises });
@@ -1001,7 +1131,7 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
         {draft.exercises.map((ex, i) => (
           <div key={i} className="rounded-xl p-3" style={{ background: C.surfaceHi, border: `1px solid ${C.line}` }}>
             <div className="flex items-start justify-between gap-2 mb-2">
-              <div className="f-body text-sm min-w-0" style={{ color: C.chalk }}>{ex.name}{ex.uni && <UniTag />}</div>
+              <div className="f-body text-sm min-w-0" style={{ color: C.chalk }}>{ex.name}{ex.uni && <UniTag />}{ex.pair && <PairTag />}</div>
               <button onClick={() => rmExercise(i)} aria-label={`Убрать «${ex.name}» из записи`} className="shrink-0 flex items-center justify-center"><Trash2 size={16} color={C.dim} /></button>
             </div>
             <div className="space-y-1.5">
@@ -1021,6 +1151,7 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
               ))}
             </div>
             <button onClick={() => addSet(i)} className="f-body mt-2 text-xs" style={{ color: C.mossText }}>+ подход</button>
+            <TagPicker tags={ex.tags} onToggle={(id) => toggleTag(i, id)} />
           </div>
         ))}
         {!draft.exercises.length && (
@@ -1063,6 +1194,8 @@ function WorkoutCard({ w, isPR, onDelete, onEdit, bodyAt }) {
   /* Вес тела на дату тренировки: без него подтягивания не попадают в тоннаж. */
   const body = bodyAt?.(w.date) || 0;
   const t = workoutTonnage(w, body);
+  /* Сумма замеров по упражнению — показывается, только если секундомер включали. */
+  const loadSec = (ex) => ex.sets.reduce((n, s) => n + (+s.sec || 0), 0);
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
       <button onClick={() => setOpen(!open)} className="w-full text-left px-3.5 py-3">
@@ -1087,7 +1220,10 @@ function WorkoutCard({ w, isPR, onDelete, onEdit, bodyAt }) {
         <div className="px-3.5 pb-3">
           {w.exercises.map((ex, i) => (
             <div key={i} className="flex items-start justify-between gap-3 text-xs f-body py-1.5" style={{ borderTop: `1px solid ${C.line}` }}>
-              <span style={{ color: C.chalk }}>{ex.name}{ex.uni && <UniTag />}</span>
+              <span className="min-w-0" style={{ color: C.chalk }}>
+                {ex.name}{ex.uni && <UniTag />}{ex.pair && <PairTag />}
+                {ex.tags?.length > 0 && <span className="f-body block text-2xs" style={{ color: ex.tags.includes("pain") ? C.redText : C.mustard }}>{tagLine(ex.tags)}</span>}
+              </span>
               <span className="f-num text-right shrink-0" style={{ color: C.dim }}>
                 {ex.sets.map((s) => (ex.bodyweight ? (+s.weight ? `${s.reps}+${s.weight}` : s.reps) : `${s.reps}×${s.weight}`)).join(" · ")}
                 {/* Своим весом непонятно, откуда взялись килограммы в тоннаже —
@@ -1097,6 +1233,7 @@ function WorkoutCard({ w, isPR, onDelete, onEdit, bodyAt }) {
                     свой вес ~{bwKg(ex.name, body)} кг{addedKg(ex) ? ` + ${addedKg(ex)} кг` : ""}
                   </span>
                 )}
+                {loadSec(ex) > 0 && <span className="f-body block text-2xs">под нагрузкой {fmtRest(loadSec(ex))}</span>}
               </span>
             </div>
           ))}
@@ -1668,7 +1805,11 @@ function BodyTab({ metrics, profile, setProfile, onAdd, onDelete, workouts, rest
               <div className="f-body text-xs uppercase tracking-wide mb-1" style={{ color: C.dim }}>Как посчитано</div>
               <CalcLine k="Длительность" v={`${energy.minutes} мин`} hint={DUR_SOURCE[energy.source]} />
               <CalcLine k="Под нагрузкой" v={`${energy.workMin} мин`}
-                hint={`${Math.round(energy.density * 100)}% времени — ${energy.level.label}, ${met} МЕТ`} />
+                hint={`${Math.round(energy.density * 100)}% времени — ${energy.level.label}, ${met} МЕТ · ${
+                  energy.measured >= 0.5
+                    ? `по секундомеру подходов${energy.measured < 1 ? " (часть оценена)" : ""}`
+                    : "оценка по темпу, около трёх секунд на повторение"
+                }`} />
               <CalcLine k="Вес тела" v={`${energy.bodyKg} кг`} hint={`замер ${fmtDate(energy.weightDate)}`} />
               <CalcLine k="Всего" v={`${energy.gross} ккал`}
                 hint={`${met} × 3,5 × ${energy.bodyKg} ÷ 200 × ${energy.minutes}`} />
@@ -1818,7 +1959,9 @@ export default function App() {
         const s = ex.sets.map((x) => (ex.bodyweight ? (+x.weight ? `${x.reps}+${x.weight}кг` : `${x.reps}`) : `${x.reps}×${x.weight}`)).join(", ");
         const rm = est1RM(ex);
         const own = ex.bodyweight ? bwKg(ex.name, bodyAt(w.date)) : null;
-        lines.push(`- ${ex.name}${ex.uni ? " [каждой стороной]" : ""}: ${s}${own ? ` [свой вес ~${own} кг]` : ""}${rm ? ` (расч.1ПМ ${rm})` : ""}`);
+        const how = [ex.uni && "каждой стороной", ex.pair && "вес одной гантели"].filter(Boolean).join(", ");
+        const marks = tagLine(ex.tags);
+        lines.push(`- ${ex.name}${how ? ` [${how}]` : ""}: ${s}${own ? ` [свой вес ~${own} кг]` : ""}${rm ? ` (расч.1ПМ ${rm})` : ""}${marks ? ` — ${marks}` : ""}`);
       });
       if (w.note) lines.push(`- заметка: ${w.note}`);
     });

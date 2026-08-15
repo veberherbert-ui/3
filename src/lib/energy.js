@@ -24,11 +24,23 @@ export function setWorkSec(reps) {
   return Math.min(WORK_MAX_SEC, Math.max(WORK_MIN_SEC, Math.round(r * SEC_PER_REP)));
 }
 
+/* Время подхода: замеренное секундомером, если его включали, иначе оценка
+   по темпу. Замер всегда точнее — три секунды на повторение это средняя
+   температура, а подход в отказ с паузами идёт вдвое дольше. */
+export const secOfSet = (set) => (+set.sec > 0 ? +set.sec : setWorkSec(set.reps));
+
 /** Сколько всего секунд под нагрузкой — сумма по всем подходам. */
 export function workSecondsOf(workout) {
   let s = 0;
-  for (const ex of workout.exercises || []) for (const set of ex.sets || []) s += setWorkSec(set.reps);
+  for (const ex of workout.exercises || []) for (const set of ex.sets || []) s += secOfSet(set);
   return s;
+}
+
+/** Доля подходов, время которых замерено секундомером, а не оценено. */
+export function measuredShare(workout) {
+  let all = 0, timed = 0;
+  for (const ex of workout.exercises || []) for (const set of ex.sets || []) { all++; if (+set.sec > 0) timed++; }
+  return all ? timed / all : 0;
 }
 
 export function setsCountOf(workout) {
@@ -45,9 +57,9 @@ export function estimateSeconds(workout, restOverrides) {
   let total = 0;
   const sets = [];
   for (const ex of workout.exercises || [])
-    for (const set of ex.sets || []) sets.push({ name: ex.name, reps: set.reps });
+    for (const set of ex.sets || []) sets.push({ name: ex.name, sec: secOfSet(set) });
   sets.forEach((s, i) => {
-    total += setWorkSec(s.reps);
+    total += s.sec;
     if (i < sets.length - 1) total += restFor(s.name, restOverrides);
   });
   return total;
@@ -72,7 +84,7 @@ export function levelFor(density) {
 
 /**
  * Полный расчёт по одной тренировке.
- * @returns {null|{minutes:number, source:"timer"|"estimate"|"fixed", workMin:number,
+ * @returns {null|{minutes:number, source:"timer"|"estimate"|"fixed", workMin:number, measured:number,
  *   density:number, level:object, gross:number, rest:number, net:number,
  *   bodyKg:number, weightDate:string}}
  */
@@ -99,7 +111,7 @@ export function workoutEnergy(workout, { metrics, bmr, restOverrides } = {}) {
   const rest = bmr ? Math.round((bmr / 1440) * minutes) : 0;
 
   return {
-    minutes, source, workMin: Math.round(workSec / 60), density, level,
+    minutes, source, workMin: Math.round(workSec / 60), measured: measuredShare(workout), density, level,
     gross, rest, net: Math.max(0, gross - rest), bodyKg: w.kg, weightDate: w.date,
   };
 }

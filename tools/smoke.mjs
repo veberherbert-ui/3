@@ -106,8 +106,15 @@ ok(rests.length > 1 && new Set(rests).size > 1, "время отдыха раз�
 
 await page.getByPlaceholder("повт").first().fill("10");
 await page.getByPlaceholder("кг").first().fill("40");
-await page.getByRole("button", { name: /^Подход 1/ }).first().click();
-await page.waitForTimeout(1000);
+/* Подход теперь засекается: ▶ — начали, секундомер — идёт, второе нажатие
+   заканчивает, ставит отметку и запускает отдых. */
+await page.getByRole("button", { name: /подход 1: начать/i }).first().click();
+await page.waitForTimeout(600);
+ok(await page.getByRole("button", { name: /подход 1: идёт/i }).first().isVisible(), "подход засекается секундомером");
+await page.waitForTimeout(5600);
+await page.getByRole("button", { name: /подход 1: идёт/i }).first().click();
+await page.waitForTimeout(900);
+ok(await page.getByRole("button", { name: /подход 1: снять отметку/i }).first().isVisible(), "после остановки подход отмечен");
 
 const restBig = await page.locator(".f-num.text-4xl").first().textContent().catch(() => null);
 ok(!!restBig, "полоса отдыха с крупным счётчиком", restBig || "");
@@ -119,6 +126,14 @@ await page.reload({ waitUntil: "networkidle" });
 await page.waitForTimeout(1500);
 const restAfter = await page.locator(".f-num.text-4xl").first().textContent().catch(() => null);
 ok(!!restAfter && restAfter !== restBig, "отдых продолжается после перезапуска", `${restBig} → ${restAfter}`);
+
+/* Метки: цифры не помнят, как оно было. */
+await page.getByRole("button", { name: /^метки/ }).first().click();
+await page.waitForTimeout(400);
+await page.getByRole("button", { name: "отказ", exact: true }).first().click();
+await page.waitForTimeout(300);
+await page.getByRole("button", { name: "болело", exact: true }).first().click();
+await page.waitForTimeout(300);
 
 await page.getByRole("button", { name: /Завершить и сохранить/ }).first().click();
 await page.waitForTimeout(1200);
@@ -133,6 +148,16 @@ const localDate = await page.evaluate(() => {
 });
 ok(saved?.[0]?.date === localDate, "дата локальная, а не UTC", `${saved?.[0]?.date} = ${localDate}`);
 ok(saved?.[0]?.exercises?.[0]?.sets?.[0]?.weight === 40, "подход сохранён верно");
+/* Замер короче пяти секунд не считается замером — иначе двойное нажатие
+   «сделано» породило бы время под нагрузкой в две секунды. */
+const sec = saved?.[0]?.exercises?.[0]?.sets?.[0]?.sec;
+ok(sec >= 5 && sec < 30, "время под нагрузкой замерено, а не оценено", `${sec} сек`);
+ok(JSON.stringify(saved?.[0]?.exercises?.[0]?.tags) === '["fail","pain"]', "метки сохранены", JSON.stringify(saved?.[0]?.exercises?.[0]?.tags));
+/* Две гантели: в поле веса одна, тоннаж считается за обе. */
+ok(saved?.[0]?.exercises?.[0]?.pair === true, "жим гантелей помечен парным");
+const pairCard = page.locator("div.rounded-xl").filter({ hasText: "Грудь + Бицепс" }).first();
+const pairTons = +((await pairCard.innerText()).match(/([\d\s\u00a0\u202f]+)\s*кг/)?.[1] || "0").replace(/[^\d]/g, "");
+ok(pairTons === 10 * 40 * 2, "тоннаж пары гантелей считается за две", `${pairTons} кг`);
 
 section("Правка записи");
 await page.locator("text=Грудь + Бицепс").first().click();
