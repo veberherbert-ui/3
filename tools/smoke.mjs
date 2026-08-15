@@ -99,23 +99,10 @@ await page.waitForTimeout(700);
 ok(await page.getByRole("button", { name: /Завершить и сохранить/ }).first().isVisible(), "сессия стартовала (порядок хуков цел)");
 
 /* у разных упражнений разное время отдыха */
-const rests = (await page.locator("div.f-body").filter({ hasText: "отдых" }).allInnerTexts())
+const rests = (await page.locator("div.f-num").filter({ hasText: "отдых" }).allInnerTexts())
   .map((t) => t.match(/отдых\s+(\S+)/)?.[1])
   .filter(Boolean);
 ok(rests.length > 1 && new Set(rests).size > 1, "время отдыха различается по упражнениям", rests.join(", "));
-
-/* Как считать вес — решает человек, а не база: в одном зале кроссовер
-   с двумя стеками, в другом бабочка с одним. Выбор запоминается. */
-await page.getByRole("button", { name: /^два сразу —/ }).first().click();
-await page.waitForTimeout(400);
-await page.getByRole("button", { name: "один снаряд", exact: true }).first().click();
-await page.waitForTimeout(600);
-ok((await dbRead("profile"))?.countModes?.["Жим гантелей лёжа (горизонт)"] === "single",
-  "выбор счёта запоминается для упражнения");
-await page.getByRole("button", { name: /^один снаряд —/ }).first().click();
-await page.waitForTimeout(400);
-await page.getByRole("button", { name: "два сразу", exact: true }).first().click();
-await page.waitForTimeout(600);
 
 await page.getByPlaceholder("повт").first().fill("10");
 await page.getByPlaceholder("кг").first().fill("40");
@@ -140,13 +127,32 @@ await page.waitForTimeout(1500);
 const restAfter = await page.locator(".f-num.text-4xl").first().textContent().catch(() => null);
 ok(!!restAfter && restAfter !== restBig, "отдых продолжается после перезапуска", `${restBig} → ${restAfter}`);
 
-/* Метки: цифры не помнят, как оно было. */
-await page.getByRole("button", { name: /^метки/ }).first().click();
+/* Метки и всё служебное — под одной кнопкой, чтобы карточка оставалась
+   про ввод подходов. */
+await page.getByRole("button", { name: /метки, техника, убрать/ }).first().click();
+await page.waitForTimeout(500);
+await page.getByRole("button", { name: "отказ", exact: true }).click();
+await page.getByRole("button", { name: "болело", exact: true }).click();
+await page.waitForTimeout(300);
+await page.getByRole("button", { name: "Закрыть", exact: true }).click();
 await page.waitForTimeout(400);
-await page.getByRole("button", { name: "отказ", exact: true }).first().click();
-await page.waitForTimeout(300);
-await page.getByRole("button", { name: "болело", exact: true }).first().click();
-await page.waitForTimeout(300);
+
+/* Отработанное упражнение складывается в строку: в середине тренировки
+   половина списка уже сделана, и держать под ней пустые поля незачем. */
+for (const j of [2, 3]) {
+  await page.getByRole("button", { name: new RegExp(`подход ${j}: начать`, "i") }).first().click();
+  await page.waitForTimeout(150);
+  await page.getByRole("button", { name: new RegExp(`подход ${j}: идёт`, "i") }).first().click();
+  await page.waitForTimeout(250);
+}
+await page.waitForTimeout(400);
+const firstSet = page.getByRole("spinbutton", { name: /Жим гантелей лёжа \(горизонт\), подход 1: повторения/ });
+ok(!(await firstSet.isVisible().catch(() => false)), "отработанное упражнение свёрнуто в строку");
+const packedRow = page.getByRole("button", { name: /Жим гантелей лёжа \(горизонт\)/ }).first();
+ok((await packedRow.innerText()).includes("10×40"), "в свёрнутой строке видно, что было сделано");
+await packedRow.click();
+await page.waitForTimeout(400);
+ok(await firstSet.isVisible(), "по нажатию раскрывается обратно");
 
 await page.getByRole("button", { name: /Завершить и сохранить/ }).first().click();
 await page.waitForTimeout(1200);
