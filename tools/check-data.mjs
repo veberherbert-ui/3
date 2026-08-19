@@ -21,7 +21,7 @@ try {
   process.exit(1);
 }
 
-const { DB_ROWS, EXDB, PRESETS, DEFAULT_DAYS, BW_SHARE, BW_STATIC, GEAR_PRESETS } = exercises;
+const { DB_ROWS, EXDB, PRESETS, DEFAULT_DAYS, BW_SHARE, BW_STATIC, GEAR_PRESETS, MOVES, moveOf } = exercises;
 const { CONDITIONS, RISKS, PREFERRED_SWAPS, HELPFUL } = conditions;
 const { TECHNIQUE } = technique;
 
@@ -87,6 +87,18 @@ known.forEach((n) => {
 });
 Object.keys(TECHNIQUE).forEach((n) => checkRef(n, "техника"));
 
+/* ---- движения ---- */
+/* Упражнение без движения выпадает из группировки в списках и из подсказки
+   «то же движение на другом снаряде» — молча и незаметно. */
+Object.keys(EXDB).forEach((n) => {
+  if (!moveOf(n)) fail("движения", `«${n}» не отнесено ни к одному движению — допиши его в MOVES`);
+});
+Object.entries(MOVES).forEach(([move, list]) => {
+  list.forEach((n) => checkRef(n, `движение «${move}»`));
+  const dup = list.filter((n, i) => list.indexOf(n) !== i);
+  if (dup.length) fail(`движение «${move}»`, `повторяется: ${dup.join(", ")}`);
+});
+
 /* ---- упражнения со своим весом ---- */
 /* Без доли веса тела такое упражнение молча даёт нулевой тоннаж — самая
    незаметная поломка из возможных: цифры есть, просто неправильные. */
@@ -114,7 +126,8 @@ if (problems.length) {
 console.log(
   `✓ Данные в порядке: ${DB_ROWS.length} упражнений, ${CONDITIONS.length} состояний, ` +
     `${Object.keys(RISKS).length} с метками травм, техника у всех, ` +
-    `${Object.keys(BW_SHARE).length} со своим весом в тоннаже.`
+    `${Object.keys(BW_SHARE).length} со своим весом в тоннаже, ` +
+    `${Object.keys(MOVES).length} движений.`
 );
 
 /* Что остаётся доступным при каждом наборе инвентаря. Не ошибка, а сводка:

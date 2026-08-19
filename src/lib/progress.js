@@ -1,4 +1,4 @@
-import { EXDB, GROUPS, PUSH_M, PULL_M } from "../data/exercises.js";
+import { EXDB, GROUPS, PUSH_M, PULL_M, moveOf } from "../data/exercises.js";
 import { exTonnage, workoutTonnage, topWeight, topReps, est1RM, r1 } from "./calc.js";
 import { workoutEnergy } from "./energy.js";
 import { daysAgo } from "./dates.js";
@@ -70,6 +70,17 @@ export function movers(workouts, days, bodyAt) {
   });
 
   const today = daysAgo(0);
+  /* Когда движение делали в последний раз — любым его вариантом.
+     «Подтягивания не делал три недели» звучит тревожно ровно до тех пор,
+     пока не вспомнишь, что всё это время тянул верхний блок. */
+  const moveLast = new Map();
+  byName.forEach((e) => {
+    const move = moveOf(e.name);
+    const last = e.points[e.points.length - 1].date;
+    if (!move) return;
+    if (!moveLast.has(move) || moveLast.get(move) < last) moveLast.set(move, last);
+  });
+
   const out = [];
   byName.forEach((e) => {
     const inRange = e.points.filter((p) => p.date >= from);
@@ -77,16 +88,25 @@ export function movers(workouts, days, bodyAt) {
     const base = inRange.length > 1 ? inRange[0] : e.points.length > 1 ? e.points[e.points.length - 2] : null;
     const delta = base ? r1(last.v - base.v) : 0;
     const idle = Math.round((Date.parse(today) - Date.parse(last.date)) / 86400000);
+    const move = moveOf(e.name) || "";
+    const moveIdle = moveLast.has(move)
+      ? Math.round((Date.parse(today) - Date.parse(moveLast.get(move))) / 86400000)
+      : idle;
     out.push({
       name: e.name,
       unit: e.unit,
       value: last.v,
       delta,
       idle,
+      move,
+      /* Заброшено — только если заброшено само движение. Упражнение,
+         которое просто заменили другим вариантом, поводом для тревоги
+         не является. */
+      moveIdle,
       times: inRange.length,
       muscle: EXDB[e.name]?.m || "",
       points: e.points,
-      state: e.points.length < 2 ? "once" : idle > 21 ? "idle" : delta > 0 ? "up" : delta < 0 ? "down" : "flat",
+      state: e.points.length < 2 ? "once" : moveIdle > 21 ? "idle" : delta > 0 ? "up" : delta < 0 ? "down" : "flat",
     });
   });
 

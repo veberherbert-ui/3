@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue, lazy, Suspense } from "react";
 import { Plus, X, TrendingUp, BookOpen, Dumbbell, Flame, Settings, Trash2, Check, Info, Play, Timer, Calculator, Copy, ExternalLink, Activity, Pause, ChevronDown, ChevronUp, MoreHorizontal, Search, Library, Layers, Pencil, RotateCcw, Download, Upload, Share2, HardDrive, ShieldAlert, TriangleAlert, HeartPulse, Repeat2, Volume2, VolumeX, RefreshCw, FileText, Type, CalendarPlus, Tag } from "lucide-react";
 
-import { EXDB, GROUPS, PRESETS, DEFAULT_DAYS, isUni, isBW, isPair, GEAR, GEAR_PRESETS, fitsGear } from "./data/exercises.js";
+import { EXDB, GROUPS, PRESETS, DEFAULT_DAYS, isUni, isBW, isPair, GEAR, GEAR_PRESETS, fitsGear, moveOf, variantsOf } from "./data/exercises.js";
 import { CONDITIONS, CONDITION_BY_ID, helpfulNote } from "./data/conditions.js";
 import { TECHNIQUE } from "./data/technique.js";
 import { TAGS, TAG_BY_ID, tagLine } from "./data/tags.js";
@@ -174,6 +174,28 @@ function RiskPanel({ name, conditions, onOpen }) {
  * Список упражнений с поиском — одинаково нужен и в редакторе дней,
  * и при добавлении упражнения в идущую тренировку.
  */
+/* Разложить упражнения мышцы по движениям.
+
+   Двенадцать вариантов на широчайшие читаются как стена. Те же двенадцать
+   под тремя подзаголовками — «вертикальная тяга», «горизонтальная тяга»,
+   «пулловер» — читаются как три решения. Дополнительного нажатия при этом
+   не появляется: заголовок не кнопка, всё видно сразу.
+
+   Когда движение в мышце одно, подзаголовок не рисуем — он ничего
+   не добавляет, а место занимает. */
+function byMove(names) {
+  /* Группируем по имени движения, а не по соседству в списке: упражнения
+     одной мышцы лежат в базе вперемешку — резину дописывали позже штанги,
+     и «горизонтальная тяга» иначе появлялась дважды. */
+  const map = new Map();
+  names.forEach((n) => {
+    const move = moveOf(n) || "";
+    if (!map.has(move)) map.set(move, []);
+    map.get(move).push(n);
+  });
+  return [...map.entries()].map(([move, list]) => ({ move, list }));
+}
+
 /* Выбор упражнения — один на всё приложение.
 
    Раньше здесь был плоский список на сто одну строку: чтобы добавить
@@ -259,7 +281,14 @@ function ExercisePicker({ title, onPick, onClose, has, conditions = [], gear = [
                         <span className="f-body text-xs" style={{ color: mo ? C.chalk : C.dim }}>{m.name}</span>
                         <span className="f-num text-2xs" style={{ color: C.dim }}>{m.list.length}</span>
                       </button>
-                      {mo && m.list.map((n) => <Row key={n} n={n} />)}
+                      {mo && byMove(m.list).map((grp) => (
+                        <div key={grp.move}>
+                          {byMove(m.list).length > 1 && (
+                            <div className="f-body text-2xs px-3 pt-2 pb-0.5" style={{ color: C.dim, borderTop: `1px solid ${C.line}` }}>{grp.move}</div>
+                          )}
+                          {grp.list.map((n) => <Row key={n} n={n} />)}
+                        </div>
+                      ))}
                     </div>
                   );
                 })}
@@ -344,6 +373,8 @@ function ExerciseInfo({ name, onClose, days, onAddToDay, conditions = [], gear =
   useEffect(() => setShown(name), [name]);
   const info = EXDB[shown];
   const [pick, setPick] = useState(false);
+  /* Варианты того же движения — только на том, что есть под рукой. */
+  const siblings = useMemo(() => variantsOf(shown).filter((n) => fitsGear(n, gear)), [shown, gear]);
   return (
     <Sheet onClose={onClose}>
       <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>
@@ -363,6 +394,26 @@ function ExerciseInfo({ name, onClose, days, onAddToDay, conditions = [], gear =
         <div className="f-body text-sm leading-relaxed mb-3" style={{ color: C.chalk }}>{info.d}</div>
         <TechniqueBlock name={shown} fallbackCue={info.cue} />
         {info.uni && <div className="f-body text-xs mb-3" style={{ color: C.blueText }}>Одностороннее: записывай один подход — приложение считает обе стороны, тоннаж умножается на два.</div>}
+
+        {/* То же движение на другом снаряде. Тренажёр занят, дома нет блока,
+            плечо не любит штангу — выбор варианта решает всё это в один тап. */}
+        {siblings.length > 0 && (
+          <div className="mb-3">
+            <div className="f-body text-xs uppercase tracking-wide mb-1.5" style={{ color: C.dim }}>
+              {moveOf(shown)} — то же движение
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {siblings.map((n) => (
+                <button key={n} onClick={() => setShown(n)} className="f-body text-xs rounded-full px-3 text-left"
+                  style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
+                  {/* Название целиком: у подтягиваний вся разница именно
+                      в скобках, и обрезать их — значит сделать два одинаковых. */}
+                  {n}<span className="text-2xs" style={{ color: C.dim }}> · {EXDB[n].eq}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </>) : <div className="f-body text-sm mb-3" style={{ color: C.dim }}>Своё упражнение — описания пока нет.</div>}
 
       <a href={ytLink(shown)} target="_blank" rel="noopener noreferrer" className="f-body flex items-center justify-center gap-2 rounded-xl py-3 text-sm font-medium" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
@@ -1112,11 +1163,18 @@ function Catalog({ days, onAddToDay, conditions, gear, setGear }) {
                           </button>
                           {mo && (
                             <div className="pb-1">
-                              {m.list.map((n) => (
-                                <button key={n} onClick={() => setInfo(n)} className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left" style={{ borderTop: `1px solid ${C.line}` }}>
-                                  <span className="f-body text-xs min-w-0" style={{ color: C.chalk }}>{n}{isUni(n) && <UniTag />}<RiskMark name={n} conditions={conditions} /></span>
-                                  <span className="f-body text-2xs shrink-0" style={{ color: C.dim }}>{EXDB[n].eq}</span>
-                                </button>
+                              {byMove(m.list).map((grp) => (
+                                <div key={grp.move}>
+                                  {byMove(m.list).length > 1 && (
+                                    <div className="f-body text-2xs px-3 pt-2 pb-0.5" style={{ color: C.dim, borderTop: `1px solid ${C.line}` }}>{grp.move}</div>
+                                  )}
+                                  {grp.list.map((n) => (
+                                    <button key={n} onClick={() => setInfo(n)} className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left" style={{ borderTop: `1px solid ${C.line}` }}>
+                                      <span className="f-body text-sm min-w-0" style={{ color: C.chalk }}>{n}{isUni(n) && <UniTag />}<RiskMark name={n} conditions={conditions} /></span>
+                                      <span className="f-body text-2xs shrink-0" style={{ color: C.dim }}>{EXDB[n].eq}</span>
+                                    </button>
+                                  ))}
+                                </div>
                               ))}
                             </div>
                           )}
@@ -1661,7 +1719,7 @@ function MoverRow({ row, open, onToggle }) {
         <span className="min-w-0 flex-1">
           <span className="f-body text-sm block truncate" style={{ color: C.chalk }}>{row.name}</span>
           <span className="f-body text-2xs block" style={{ color: st.color }}>
-            {st.label}{row.state === "idle" ? ` · ${row.idle} дн` : row.delta ? ` · ${row.delta > 0 ? "+" : ""}${row.delta} ${row.unit}` : ""}
+            {st.label}{row.state === "idle" ? ` · ${row.move.toLowerCase()}, ${row.moveIdle} дн` : row.delta ? ` · ${row.delta > 0 ? "+" : ""}${row.delta} ${row.unit}` : ""}
           </span>
         </span>
         <Spark points={row.points.slice(-8)} color={st.color} />
@@ -1673,7 +1731,7 @@ function MoverRow({ row, open, onToggle }) {
             <LineByDate data={chart} dataKey="v" name={`рабочий вес, ${row.unit}`} height={180} />
           </ChartFrame>
           <div className="f-body text-2xs px-1.5 pb-1" style={{ color: C.dim }}>
-            {row.muscle} · подходов за период: {row.times}
+            {row.muscle} · {row.move.toLowerCase()} · подходов за период: {row.times}
           </div>
         </div>
       )}
