@@ -218,6 +218,15 @@ await page.waitForTimeout(800);
 const before = await page.locator("button:has-text('+ подход')").count();
 await page.getByRole("button", { name: /Добавить упражнение/ }).click();
 await page.waitForTimeout(600);
+/* Выбор идёт по областям, а не плоским списком на сто одну строку:
+   сначала область, потом мышца, потом упражнение. */
+ok(await page.getByRole("button", { name: /^Спина/ }).first().isVisible(), "выбор упражнения начинается с областей");
+await page.getByRole("button", { name: /^Плечи/ }).first().click();
+await page.waitForTimeout(400);
+ok(await page.getByRole("button", { name: /^Задняя дельта/ }).first().isVisible(), "внутри области — мышцы");
+await page.getByRole("button", { name: /^Задняя дельта/ }).first().click();
+await page.waitForTimeout(400);
+ok(await page.getByRole("button", { name: /^Фейспул/ }).first().isVisible(), "внутри мышцы — упражнения");
 await page.getByPlaceholder(/Поиск по названию/).fill("фейспул");
 await page.waitForTimeout(500);
 await page.getByText("Фейспул", { exact: false }).first().click();
@@ -327,6 +336,25 @@ await page.waitForTimeout(600);
 ok((await page.locator("body").innerText()).includes("← назад"), "переход по замене с возвратом");
 await page.getByRole("button", { name: "Закрыть" }).click();
 await page.waitForTimeout(400);
+
+section("Инвентарь");
+await tab("База");
+await page.getByRole("button", { name: /Мой инвентарь/ }).click();
+await page.waitForTimeout(500);
+await page.getByRole("button", { name: "Дом: гантели", exact: true }).click();
+await page.waitForTimeout(700);
+const homeSearch = await page.getByPlaceholder(/Поиск среди/).getAttribute("placeholder");
+ok(/42/.test(homeSearch), "инвентарь сокращает каталог", homeSearch);
+await page.getByPlaceholder(/Поиск среди/).fill("смит");
+await page.waitForTimeout(500);
+ok(await page.getByText("Ничего не нашлось").isVisible(), "чего нет в инвентаре — не предлагается");
+await page.getByPlaceholder(/Поиск среди/).fill("");
+await page.waitForTimeout(300);
+await page.getByRole("button", { name: "Полный зал", exact: true }).click();
+await page.waitForTimeout(600);
+ok(/101/.test(await page.getByPlaceholder(/Поиск среди/).getAttribute("placeholder")), "«полный зал» возвращает всё");
+await page.getByRole("button", { name: /Мой инвентарь/ }).click();
+await page.waitForTimeout(300);
 
 section("Резервная копия");
 await page.locator('button[aria-label="Настройки"]').click();

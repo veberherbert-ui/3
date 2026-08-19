@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue, lazy, Suspense } from "react";
 import { Plus, X, TrendingUp, BookOpen, Dumbbell, Flame, Settings, Trash2, Check, Info, Play, Timer, Calculator, Copy, ExternalLink, Activity, Pause, ChevronDown, ChevronUp, MoreHorizontal, Search, Library, Layers, Pencil, RotateCcw, Download, Upload, Share2, HardDrive, ShieldAlert, TriangleAlert, HeartPulse, Repeat2, Volume2, VolumeX, RefreshCw, FileText, Type, CalendarPlus, Tag } from "lucide-react";
 
-import { EXDB, GROUPS, ALL_MUSCLES, PUSH_M, PULL_M, PRESETS, DEFAULT_DAYS, isUni, isBW, isPair } from "./data/exercises.js";
+import { EXDB, GROUPS, ALL_MUSCLES, PUSH_M, PULL_M, PRESETS, DEFAULT_DAYS, isUni, isBW, isPair, GEAR, GEAR_PRESETS, fitsGear } from "./data/exercises.js";
 import { CONDITIONS, CONDITION_BY_ID, helpfulNote } from "./data/conditions.js";
 import { TECHNIQUE } from "./data/technique.js";
 import { TAGS, TAG_BY_ID, tagLine } from "./data/tags.js";
@@ -172,14 +172,52 @@ function RiskPanel({ name, conditions, onOpen }) {
  * Список упражнений с поиском — одинаково нужен и в редакторе дней,
  * и при добавлении упражнения в идущую тренировку.
  */
-function ExercisePicker({ title, onPick, onClose, has, conditions = [] }) {
+/* Выбор упражнения — один на всё приложение.
+
+   Раньше здесь был плоский список на сто одну строку: чтобы добавить
+   упражнение в тренировку, приходилось листать всё подряд или помнить
+   название. Теперь тот же путь, что и в каталоге: область — мышца —
+   упражнение. Три коротких списка вместо одного длинного.
+
+   Поиск остался сверху: кто помнит название, тот его печатает, и никакие
+   раскрытия ему не нужны. */
+function ExercisePicker({ title, onPick, onClose, has, conditions = [], gear = [] }) {
   const [q, setQ] = useState("");
+  const [openG, setOpenG] = useState(null);
+  const [openM, setOpenM] = useState(null);
+  const [all, setAll] = useState(false);
   const query = q.trim().toLowerCase();
-  const list = useMemo(() => {
-    const all = Object.keys(EXDB);
-    if (query.length < 2) return all;
-    return all.filter((n) => n.toLowerCase().includes(query) || EXDB[n].m.toLowerCase().includes(query));
-  }, [query]);
+
+  /* Инвентарь прячет то, чего не на чем сделать. Но уже добавленное
+     показываем всегда: иначе упражнение из старой тренировки исчезнет
+     и будет непонятно, куда делось. */
+  const ok = useCallback((n) => all || fitsGear(n, gear) || has?.(n), [all, gear, has]);
+
+  const found = useMemo(() => {
+    if (query.length < 2) return null;
+    return Object.keys(EXDB).filter((n) =>
+      ok(n) && (n.toLowerCase().includes(query) || EXDB[n].m.toLowerCase().includes(query)));
+  }, [query, ok]);
+
+  const hidden = useMemo(
+    () => (all || !gear.length ? 0 : Object.keys(EXDB).filter((n) => !fitsGear(n, gear)).length),
+    [all, gear],
+  );
+
+  const Row = ({ n }) => {
+    const already = has?.(n);
+    return (
+      <button onClick={() => onPick(n)} disabled={already}
+        className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left"
+        style={{ background: C.surfaceHi, opacity: already ? 0.45 : 1, borderTop: `1px solid ${C.line}` }}>
+        <span className="min-w-0">
+          <span className="f-body text-sm block" style={{ color: C.chalk }}>{n}{isUni(n) && <UniTag />}<RiskMark name={n} conditions={conditions} /></span>
+          <span className="f-body text-2xs" style={{ color: C.dim }}>{EXDB[n].eq}</span>
+        </span>
+        {already ? <Check size={15} color={C.mossText} className="shrink-0" /> : <Plus size={15} color={C.mossText} className="shrink-0" />}
+      </button>
+    );
+  };
 
   return (
     <Sheet onClose={onClose}>
@@ -189,23 +227,52 @@ function ExercisePicker({ title, onPick, onClose, has, conditions = [] }) {
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Поиск по названию или мышце…" aria-label="Поиск упражнения"
           className="f-body w-full rounded-lg pl-9 pr-3 py-2.5 text-sm" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }} />
       </div>
-      <div className="space-y-1">
-        {!list.length && <div className="f-body text-sm text-center py-8" style={{ color: C.dim }}>Ничего не нашлось.</div>}
-        {list.map((n) => {
-          const already = has?.(n);
-          return (
-            <button key={n} onClick={() => onPick(n)} disabled={already} className="w-full flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-left"
-              style={{ background: C.surfaceHi, opacity: already ? 0.45 : 1 }}>
-              <span className="min-w-0">
-                <span className="f-body text-xs block" style={{ color: C.chalk }}>{n}{isUni(n) && <UniTag />}<RiskMark name={n} conditions={conditions} /></span>
-                <span className="f-body text-2xs" style={{ color: C.dim }}>{EXDB[n].m} · {EXDB[n].eq}</span>
-              </span>
-              {already ? <Check size={14} color={C.mossText} /> : <Plus size={14} color={C.mossText} />}
-            </button>
-          );
-        })}
-      </div>
-      <button onClick={onClose} className="f-body w-full mt-3 py-3 text-sm" style={{ color: C.dim }}>Готово</button>
+
+      {found ? (
+        <div className="rounded-lg overflow-hidden" style={{ background: C.surfaceHi }}>
+          {!found.length && <div className="f-body text-sm text-center py-8" style={{ color: C.dim }}>Ничего не нашлось.</div>}
+          {found.map((n) => <Row key={n} n={n} />)}
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          {GROUPS.map((g) => {
+            const muscles = g.muscles.map((m) => ({ ...m, list: m.list.filter(ok) })).filter((m) => m.list.length);
+            if (!muscles.length) return null;
+            const count = muscles.reduce((n, m) => n + m.list.length, 0);
+            const open = openG === g.name;
+            return (
+              <div key={g.name} className="rounded-lg overflow-hidden" style={{ background: C.surfaceHi }}>
+                <button onClick={() => { setOpenG(open ? null : g.name); setOpenM(null); }} className="w-full flex items-center justify-between px-3 py-2.5">
+                  <span className="f-body text-sm font-medium" style={{ color: open ? C.red : C.chalk }}>{g.name}</span>
+                  <span className="flex items-center gap-2">
+                    <span className="f-num text-2xs" style={{ color: C.dim }}>{count}</span>
+                    {open ? <ChevronUp size={15} color={C.dim} /> : <ChevronDown size={15} color={C.dim} />}
+                  </span>
+                </button>
+                {open && muscles.map((m) => {
+                  const mo = openM === m.name;
+                  return (
+                    <div key={m.name} style={{ borderTop: `1px solid ${C.line}` }}>
+                      <button onClick={() => setOpenM(mo ? null : m.name)} className="w-full flex items-center justify-between px-3 py-2">
+                        <span className="f-body text-xs" style={{ color: mo ? C.chalk : C.dim }}>{m.name}</span>
+                        <span className="f-num text-2xs" style={{ color: C.dim }}>{m.list.length}</span>
+                      </button>
+                      {mo && m.list.map((n) => <Row key={n} n={n} />)}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {hidden > 0 && (
+        <button onClick={() => setAll(true)} className="f-body w-full mt-2 py-2.5 text-xs" style={{ color: C.blueText }}>
+          Скрыто {hidden} — нет в моём инвентаре. Показать всё
+        </button>
+      )}
+      <button onClick={onClose} className="f-body w-full mt-2 py-3 text-sm" style={{ color: C.dim }}>Готово</button>
     </Sheet>
   );
 }
@@ -270,7 +337,7 @@ function TechniqueBlock({ name, fallbackCue }) {
   );
 }
 
-function ExerciseInfo({ name, onClose, days, onAddToDay, conditions = [] }) {
+function ExerciseInfo({ name, onClose, days, onAddToDay, conditions = [], gear = [] }) {
   const [shown, setShown] = useState(name);
   useEffect(() => setShown(name), [name]);
   const info = EXDB[shown];
@@ -290,7 +357,7 @@ function ExerciseInfo({ name, onClose, days, onAddToDay, conditions = [] }) {
           <span className="f-body text-xs rounded-full px-2 py-0.5" style={{ background: C.surfaceHi, color: C.dim, border: `1px solid ${C.line}` }}>{info.eq}</span>
           {info.uni && <span className="f-body text-xs rounded-full px-2 py-0.5" style={{ background: C.blue, color: C.chalk }}>одностороннее</span>}
         </div>
-        <RiskPanel name={shown} conditions={conditions} onOpen={setShown} />
+        <RiskPanel name={shown} conditions={conditions} onOpen={setShown} gear={gear} />
         <div className="f-body text-sm leading-relaxed mb-3" style={{ color: C.chalk }}>{info.d}</div>
         <TechniqueBlock name={shown} fallbackCue={info.cue} />
         {info.uni && <div className="f-body text-xs mb-3" style={{ color: C.blueText }}>Одностороннее: записывай один подход — приложение считает обе стороны, тоннаж умножается на два.</div>}
@@ -525,7 +592,7 @@ function RestBar({ rest, onDone, onAdjust, onSkip, muted }) {
   );
 }
 
-function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, conditions, restOverrides, setRestOverride, muted, bodyAt }) {
+function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, conditions, restOverrides, setRestOverride, muted, bodyAt, gear }) {
   const [pickDay, setPickDay] = useState(days[0]?.id);
   const [picked, setPicked] = useState([]);
   const [custom, setCustom] = useState("");
@@ -632,7 +699,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
             Повторить прошлую ({fmtDate(lastWorkoutOfDay.date)}, {lastWorkoutOfDay.exercises.length} упр.)
           </button>
         )}
-        {info && <ExerciseInfo name={info} onClose={() => setInfo(null)} conditions={conditions} />}
+        {info && <ExerciseInfo name={info} onClose={() => setInfo(null)} conditions={conditions} gear={gear} />}
       </div>
     );
   }
@@ -854,6 +921,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
         <ExercisePicker
           title="Добавить в тренировку"
           conditions={conditions}
+          gear={gear}
           has={(n) => session.exercises.some((e) => e.name === n)}
           onPick={addExercise}
           onClose={() => setAdding(false)}
@@ -872,27 +940,102 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
           <button onClick={() => setMenu(false)} className="f-body w-full mt-2 py-3 text-sm" style={{ color: C.dim }}>Отмена</button>
         </Sheet>
       )}
-      {info && <ExerciseInfo name={info} onClose={() => setInfo(null)} conditions={conditions} />}
+      {info && <ExerciseInfo name={info} onClose={() => setInfo(null)} conditions={conditions} gear={gear} />}
     </div>
   );
 }
 
 /* ============ CATALOG / DAYS ============ */
-function Catalog({ days, onAddToDay, conditions }) {
+/* Мой инвентарь.
+
+   Смысл не в том, чтобы спрятать упражнения, а в том, чтобы не предлагать
+   человеку то, чего он не может сделать: ни в каталоге, ни при сборе
+   тренировки, ни — что важнее всего — в заменах при травме. Предложить
+   вместо жима гантелями «жим в Смите» тому, у кого дома одни гантели, —
+   бесполезный совет.
+
+   Пустой набор означает «всё есть»: пока инвентарь не трогали, приложение
+   ведёт себя как раньше. */
+function GearCard({ gear, setGear }) {
+  const [open, setOpen] = useState(false);
+  const on = (id) => !gear.length || gear.includes(id);
+  const toggle = (id) => {
+    const cur = gear.length ? gear : GEAR.map((g) => g.id);
+    const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+    /* Выключили всё — значит фильтровать нечем, возвращаемся к «всё есть». */
+    setGear(next.length === GEAR.length || !next.length ? [] : next);
+  };
+  const count = Object.keys(EXDB).filter((n) => fitsGear(n, gear)).length;
+
+  return (
+    <div className="rounded-xl mb-3 overflow-hidden" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+      <button onClick={() => setOpen((v) => !v)} className="w-full flex items-center justify-between px-3.5 py-3">
+        <span className="min-w-0 text-left">
+          <span className="f-display text-sm font-semibold block" style={{ color: C.chalk }}>Мой инвентарь</span>
+          <span className="f-body text-2xs block" style={{ color: C.dim }}>
+            {gear.length ? `${gear.length} из ${GEAR.length} — доступно ${count} упражнений` : "всё оборудование зала"}
+          </span>
+        </span>
+        {open ? <ChevronUp size={15} color={C.dim} /> : <ChevronDown size={15} color={C.dim} />}
+      </button>
+      {open && (
+        <div className="px-3.5 pb-3.5">
+          <div className="f-body text-xs mb-2" style={{ color: C.dim }}>
+            Упражнения на том, чего нет, не будут предлагаться — ни в каталоге,
+            ни при сборе тренировки, ни в заменах при травме.
+          </div>
+          <div className="space-y-1.5">
+            {GEAR.map((g) => {
+              const has = on(g.id);
+              const n = Object.keys(EXDB).filter((x) => EXDB[x].eq === g.id).length;
+              return (
+                <button key={g.id} onClick={() => toggle(g.id)} aria-pressed={has}
+                  className="w-full flex items-center gap-2.5 rounded-lg px-3 py-2 text-left"
+                  style={{ background: C.surfaceHi, border: `1px solid ${has ? C.moss : C.line}` }}>
+                  <span className="w-6 h-6 rounded flex items-center justify-center shrink-0"
+                    style={{ background: has ? C.moss : "transparent", border: `1px solid ${has ? C.moss : C.line}` }}>
+                    {has && <Check size={15} color={C.chalk} />}
+                  </span>
+                  <span className="f-body text-sm flex-1 min-w-0" style={{ color: has ? C.chalk : C.dim }}>{g.label}</span>
+                  <span className="f-num text-2xs shrink-0" style={{ color: C.dim }}>{n}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="f-body text-xs mt-3 mb-1.5" style={{ color: C.dim }}>Готовые наборы</div>
+          <div className="flex flex-wrap gap-1.5">
+            {GEAR_PRESETS.map((pr) => (
+              <button key={pr.id} onClick={() => setGear(pr.id === "all" ? [] : pr.gear)}
+                className="f-body text-xs rounded-full px-3"
+                style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
+                {pr.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Catalog({ days, onAddToDay, conditions, gear, setGear }) {
   const [q, setQ] = useState("");
   const [openG, setOpenG] = useState(null);
   const [openM, setOpenM] = useState(null);
   const [info, setInfo] = useState(null);
 
+  const fits = useCallback((n) => fitsGear(n, gear), [gear]);
+  const avail = useMemo(() => Object.keys(EXDB).filter(fits), [fits]);
   const found = q.trim().length > 1
-    ? Object.keys(EXDB).filter((n) => n.toLowerCase().includes(q.trim().toLowerCase()) || EXDB[n].m.toLowerCase().includes(q.trim().toLowerCase()))
+    ? avail.filter((n) => n.toLowerCase().includes(q.trim().toLowerCase()) || EXDB[n].m.toLowerCase().includes(q.trim().toLowerCase()))
     : null;
 
   return (
     <div>
+      <GearCard gear={gear} setGear={setGear} />
       <div className="relative mb-3">
         <Search size={15} color={C.dim} className="absolute left-3 top-1/2 -translate-y-1/2" />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Поиск среди ${Object.keys(EXDB).length} упражнений…`} aria-label="Поиск по базе упражнений"
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Поиск среди ${avail.length} упражнений…`} aria-label="Поиск по базе упражнений"
           className="f-body w-full rounded-lg pl-9 pr-3 py-2.5 text-sm" style={{ background: C.surface, color: C.chalk, border: `1px solid ${C.line}` }} />
       </div>
 
@@ -909,7 +1052,9 @@ function Catalog({ days, onAddToDay, conditions }) {
       ) : (
         <div className="space-y-2">
           {GROUPS.map((g) => {
-            const count = g.muscles.reduce((s, m) => s + m.list.length, 0);
+            const muscles = g.muscles.map((m) => ({ ...m, list: m.list.filter(fits) })).filter((m) => m.list.length);
+            if (!muscles.length) return null;
+            const count = muscles.reduce((s, m) => s + m.list.length, 0);
             const open = openG === g.name;
             return (
               <div key={g.name} className="rounded-xl overflow-hidden" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
@@ -922,7 +1067,7 @@ function Catalog({ days, onAddToDay, conditions }) {
                 </button>
                 {open && (
                   <div className="px-2 pb-2 space-y-1">
-                    {g.muscles.map((m) => {
+                    {muscles.map((m) => {
                       const mo = openM === m.name;
                       return (
                         <div key={m.name} className="rounded-lg overflow-hidden" style={{ background: C.surfaceHi }}>
@@ -950,12 +1095,12 @@ function Catalog({ days, onAddToDay, conditions }) {
           })}
         </div>
       )}
-      {info && <ExerciseInfo name={info} onClose={() => setInfo(null)} days={days} onAddToDay={onAddToDay} conditions={conditions} />}
+      {info && <ExerciseInfo name={info} onClose={() => setInfo(null)} days={days} onAddToDay={onAddToDay} conditions={conditions} gear={gear} />}
     </div>
   );
 }
 
-function DaysEditor({ days, setDays, conditions }) {
+function DaysEditor({ days, setDays, conditions, gear }) {
   const [open, setOpen] = useState(null);
   const [pickFor, setPickFor] = useState(null);
   const [presets, setPresets] = useState(false);
@@ -1044,6 +1189,7 @@ function DaysEditor({ days, setDays, conditions }) {
         <ExercisePicker
           title={`Добавить в «${days.find((d) => d.id === pickFor)?.name}»`}
           conditions={conditions}
+          gear={gear}
           has={(n) => !!days.find((d) => d.id === pickFor)?.exercises.includes(n)}
           onPick={(n) => addEx(pickFor, n)}
           onClose={() => setPickFor(null)}
@@ -1070,7 +1216,7 @@ function DaysEditor({ days, setDays, conditions }) {
   );
 }
 
-function BaseTab({ days, setDays, initialView, conditions }) {
+function BaseTab({ days, setDays, initialView, conditions, gear, setGear }) {
   const [view, setView] = useState(initialView || "catalog");
   useEffect(() => { if (initialView) setView(initialView); }, [initialView]);
   const addToDay = (id, n) => setDays(days.map((d) => (d.id === id && !d.exercises.includes(n) ? { ...d, exercises: [...d.exercises, n] } : d)));
@@ -1081,7 +1227,7 @@ function BaseTab({ days, setDays, initialView, conditions }) {
           <button key={id} onClick={() => setView(id)} className="f-body flex-1 text-xs py-2" style={{ background: view === id ? C.red : C.surface, color: view === id ? C.chalk : C.dim }}>{l}</button>
         ))}
       </div>
-      {view === "catalog" ? <Catalog days={days} onAddToDay={addToDay} conditions={conditions} /> : <DaysEditor days={days} setDays={setDays} conditions={conditions} />}
+      {view === "catalog" ? <Catalog days={days} onAddToDay={addToDay} conditions={conditions} gear={gear} setGear={setGear} /> : <DaysEditor days={days} setDays={setDays} conditions={conditions} gear={gear} />}
     </div>
   );
 }
@@ -1091,7 +1237,7 @@ function BaseTab({ days, setDays, initialView, conditions }) {
  * Форма тренировки: правка записанной и запись задним числом — одно и то же.
  * Разница только в заголовке и в том, куда уходит результат.
  */
-function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [], isNew = false, bodyAt }) {
+function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [], isNew = false, bodyAt, gear }) {
   const [adding, setAdding] = useState(false);
   /* работаем на копии — «Отмена» должна оставлять запись нетронутой */
   const [draft, setDraft] = useState(() => ({
@@ -1223,6 +1369,7 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
         <ExercisePicker
           title="Добавить упражнение"
           conditions={conditions}
+          gear={gear}
           has={(n) => draft.exercises.some((e) => e.name === n)}
           onPick={addExercise}
           onClose={() => setAdding(false)}
@@ -1295,7 +1442,7 @@ function WorkoutCard({ w, isPR, onDelete, onEdit, bodyAt }) {
   );
 }
 
-function JournalTab({ workouts, onDelete, onExport, onUpdate, onAdd, days, conditions, bodyAt }) {
+function JournalTab({ workouts, onDelete, onExport, onUpdate, onAdd, days, conditions, bodyAt, gear }) {
   const [editing, setEditing] = useState(null);
   /* запись задним числом: сначала выбираем день, потом заполняем ту же форму */
   const [pickDay, setPickDay] = useState(false);
@@ -1375,6 +1522,7 @@ function JournalTab({ workouts, onDelete, onExport, onUpdate, onAdd, days, condi
           workouts={workouts}
           conditions={conditions}
           bodyAt={bodyAt}
+          gear={gear}
           onClose={() => setEditing(null)}
           onSave={(w) => { onUpdate(w); setEditing(null); }}
         />
@@ -1410,6 +1558,7 @@ function JournalTab({ workouts, onDelete, onExport, onUpdate, onAdd, days, condi
           workouts={workouts}
           conditions={conditions}
           bodyAt={bodyAt}
+          gear={gear}
           isNew
           onClose={() => setCreating(null)}
           onSave={(w) => { onAdd(w); setCreating(null); }}
@@ -2021,6 +2170,11 @@ export default function App() {
   useEffect(() => { if (!session) releaseAudio(); }, [session]);
 
   /** Правки времени отдыха, сделанные прямо на тренировке */
+  /* Инвентарь: что есть под рукой. Пустой набор — «всё», так приложение
+     ведёт себя до того, как его настроили. */
+  const gear = useMemo(() => profile.gear || [], [profile.gear]);
+  const setGear = useCallback((list) => setProfile((p) => ({ ...p, gear: list })), [setProfile]);
+
   const restOverrides = useMemo(() => profile.restOverrides || {}, [profile.restOverrides]);
   const setRestOverride = useCallback((name, sec) => {
     setProfile((p) => ({ ...p, restOverrides: { ...(p.restOverrides || {}), [name]: sec } }));
@@ -2120,10 +2274,10 @@ export default function App() {
 
       <div ref={scroller} className="flex-1 overflow-y-auto w-full max-w-xl mx-auto" role="tabpanel" id="tabpanel" aria-labelledby={`tab-${shownTab}`}>
         <div key={shownTab} className="tab-in">
-        {shownTab === "session" && <SessionTab session={session} setSession={setSession} workouts={workouts} days={days} onFinish={finishSession} goToDays={() => { setBaseView("days"); setTab("base"); }} conditions={conditions} restOverrides={restOverrides} setRestOverride={setRestOverride} muted={muted} bodyAt={bodyAt} />}
-        {shownTab === "journal" && <JournalTab workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} onUpdate={updateWorkout} onAdd={addWorkout} days={days} conditions={conditions} bodyAt={bodyAt} />}
+        {shownTab === "session" && <SessionTab session={session} setSession={setSession} workouts={workouts} days={days} onFinish={finishSession} goToDays={() => { setBaseView("days"); setTab("base"); }} conditions={conditions} restOverrides={restOverrides} setRestOverride={setRestOverride} muted={muted} bodyAt={bodyAt} gear={gear} />}
+        {shownTab === "journal" && <JournalTab workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} onUpdate={updateWorkout} onAdd={addWorkout} days={days} conditions={conditions} bodyAt={bodyAt} gear={gear} />}
         {shownTab === "progress" && <ProgressTab workouts={workouts} bodyAt={bodyAt} />}
-        {shownTab === "base" && <BaseTab days={days} setDays={setDays} initialView={baseView} conditions={conditions} />}
+        {shownTab === "base" && <BaseTab days={days} setDays={setDays} initialView={baseView} conditions={conditions} gear={gear} setGear={setGear} />}
         {shownTab === "body" && <BodyTab metrics={metrics} profile={profile} setProfile={setProfile} onAdd={addMetric} onDelete={deleteMetric} workouts={workouts} restOverrides={restOverrides} />}
         </div>
       </div>

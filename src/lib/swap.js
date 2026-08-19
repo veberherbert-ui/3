@@ -1,4 +1,4 @@
-import { EXDB, GROUPS, PUSH_M, PULL_M } from "../data/exercises.js";
+import { fitsGear, EXDB, GROUPS, PUSH_M, PULL_M } from "../data/exercises.js";
 import { worstRisk, risksFor, PREFERRED_SWAPS } from "../data/conditions.js";
 
 /* Подбор замены упражнению, которое не подходит по состоянию здоровья.
@@ -63,13 +63,20 @@ const byRiskThenCloseness = (a, b) => a.risk - b.risk || a.d - b.d || a.name.loc
  * @param {number} limit сколько вариантов вернуть
  * @returns {{name:string, risk:number, muscle:string, eq:string, sameMuscle:boolean}[]}
  */
-export function saferAlternatives(exName, condIds, limit = 5) {
+export function saferAlternatives(exName, condIds, limit = 5, gear = []) {
   const own = worstRisk(exName, condIds);
   if (!own) return [];
 
   const info = EXDB[exName];
   const { sameMuscle, sameGroup } = relatives(exName);
-  const safer = (list) => list.map(rank(exName, condIds)).filter((c) => c.risk < own).sort(byRiskThenCloseness);
+  /* Замена на снаряд, которого у человека нет, — не замена. Если после
+     фильтра не остаётся ничего, инвентарь игнорируем: пустой список
+     бесполезнее неточного. */
+  const safer = (list) => {
+    const ranked = list.map(rank(exName, condIds)).filter((c) => c.risk < own).sort(byRiskThenCloseness);
+    const mine = ranked.filter((c) => fitsGear(c.name, gear));
+    return mine.length ? mine : ranked;
+  };
 
   const out = [];
   const taken = new Set();
