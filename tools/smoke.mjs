@@ -373,10 +373,13 @@ section("Инвентарь");
 await tab("База");
 await page.getByRole("button", { name: /Мой инвентарь/ }).click();
 await page.waitForTimeout(500);
+/* Числа не зашиваем: база растёт, а проверка должна пережить это. */
+const catalogCount = async () => +((await page.getByPlaceholder(/Поиск среди/).getAttribute("placeholder")).match(/\d+/)?.[0] || 0);
+const allCount = await catalogCount();
 await page.getByRole("button", { name: "Дом: гантели", exact: true }).click();
 await page.waitForTimeout(700);
-const homeSearch = await page.getByPlaceholder(/Поиск среди/).getAttribute("placeholder");
-ok(/42/.test(homeSearch), "инвентарь сокращает каталог", homeSearch);
+const homeCount = await catalogCount();
+ok(homeCount > 0 && homeCount < allCount, "инвентарь сокращает каталог", `${allCount} → ${homeCount}`);
 await page.getByPlaceholder(/Поиск среди/).fill("смит");
 await page.waitForTimeout(500);
 ok(await page.getByText("Ничего не нашлось").isVisible(), "чего нет в инвентаре — не предлагается");
@@ -384,7 +387,7 @@ await page.getByPlaceholder(/Поиск среди/).fill("");
 await page.waitForTimeout(300);
 await page.getByRole("button", { name: "Полный зал", exact: true }).click();
 await page.waitForTimeout(600);
-ok(/101/.test(await page.getByPlaceholder(/Поиск среди/).getAttribute("placeholder")), "«полный зал» возвращает всё");
+ok((await catalogCount()) === allCount, "«полный зал» возвращает всё");
 await page.getByRole("button", { name: /Мой инвентарь/ }).click();
 await page.waitForTimeout(300);
 

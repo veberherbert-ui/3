@@ -21,7 +21,7 @@ try {
   process.exit(1);
 }
 
-const { DB_ROWS, EXDB, PRESETS, DEFAULT_DAYS, BW_SHARE, BW_STATIC } = exercises;
+const { DB_ROWS, EXDB, PRESETS, DEFAULT_DAYS, BW_SHARE, BW_STATIC, GEAR_PRESETS } = exercises;
 const { CONDITIONS, RISKS, PREFERRED_SWAPS, HELPFUL } = conditions;
 const { TECHNIQUE } = technique;
 
@@ -87,7 +87,6 @@ known.forEach((n) => {
 });
 Object.keys(TECHNIQUE).forEach((n) => checkRef(n, "техника"));
 
-/* ---- итог ---- */
 /* ---- упражнения со своим весом ---- */
 /* Без доли веса тела такое упражнение молча даёт нулевой тоннаж — самая
    незаметная поломка из возможных: цифры есть, просто неправильные. */
@@ -117,3 +116,17 @@ console.log(
     `${Object.keys(RISKS).length} с метками травм, техника у всех, ` +
     `${Object.keys(BW_SHARE).length} со своим весом в тоннаже.`
 );
+
+/* Что остаётся доступным при каждом наборе инвентаря. Не ошибка, а сводка:
+   она сразу показывает, какие мышцы нечем нагрузить дома — и куда дописывать
+   упражнения в следующий раз. */
+const muscles = [...new Set(Object.values(EXDB).map((i) => i.m))];
+GEAR_PRESETS.forEach((pr) => {
+  const list = Object.entries(EXDB).filter(([, i]) => !pr.gear.length || pr.gear.includes(i.eq));
+  const covered = new Set(list.map(([, i]) => i.m));
+  const gap = muscles.filter((m) => !covered.has(m));
+  console.log(
+    `  ${pr.label.padEnd(24)} ${String(list.length).padStart(3)} упр · ${covered.size}/${muscles.length} мышц` +
+      (gap.length ? ` · нечем: ${gap.join(", ")}` : "")
+  );
+});
