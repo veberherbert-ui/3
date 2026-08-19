@@ -15,6 +15,8 @@ import {
   bodyFatNavy, bmiOf, lbmOf, ffmiOf,
 } from "./lib/calc.js";
 import { loadKey, saveKey, deleteKey, requestPersistence, storageEstimate } from "./lib/storage.js";
+import { fillPairFlags } from "./lib/migrate.js";
+import { useDragOrder, moveItem } from "./lib/reorder.js";
 import { shareOrDownload, readFileAsText, backupName } from "./lib/backup.js";
 import { restFor, fmtRest, stepRest } from "./lib/rest.js";
 import { workoutEnergy } from "./lib/energy.js";
@@ -608,6 +610,9 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
   useEffect(() => { if (day) setPicked(day.exercises); }, [pickDay, days.length]); // eslint-disable-line
 
   /* объявлено до раннего возврата ниже — хуки нельзя вызывать под условием */
+  const moveExercise = useCallback((from, to) =>
+    setSession((s) => ({ ...s, exercises: moveItem(s.exercises, from, to) })), [setSession]);
+  const { drag, handlers, rowRef, dragging, didDrag } = useDragOrder(session?.exercises?.length || 0, moveExercise);
   const clearRest = useCallback(() => setSession((s) => (s?.rest ? { ...s, rest: null } : s)), [setSession]);
 
   /* пока идёт тренировка, экран не гаснет */
@@ -825,10 +830,19 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
              три пустых поля незачем: нужное сейчас должно быть на экране,
              а не за двумя пролистываниями. */
           const packed = filled.length === ex.sets.length && filled.length > 0 && !opened[ex.name];
+          /* Карточка под пальцем приподнимается, соседи расступаются:
+             видно, куда она встанет, если отпустить. */
+          const held = drag?.from === i;
+          const target = drag && drag.to === i && !held;
+          const lift = held
+            ? { opacity: 0.9, transform: "scale(1.02)", boxShadow: "0 8px 24px rgba(0,0,0,.5)", zIndex: 10, position: "relative" }
+            : target
+              ? { borderColor: C.blue }
+              : null;
           if (packed) return (
-            <button key={i} onClick={() => setOpened((o) => ({ ...o, [ex.name]: true }))}
+            <button key={i} ref={rowRef(i)} {...handlers(i)} onClick={() => { if (!dragging && !didDrag()) setOpened((o) => ({ ...o, [ex.name]: true })); }}
               className="w-full text-left rounded-xl px-3 py-2.5 flex items-center gap-2"
-              style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+              style={{ background: C.surface, border: `1px solid ${C.line}`, touchAction: dragging ? "none" : undefined, ...lift }}>
               <Check size={16} color={C.moss} className="shrink-0" />
               <span className="min-w-0 flex-1">
                 <span className="f-body text-sm block truncate" style={{ color: C.dim }}>{ex.name}</span>
@@ -838,8 +852,11 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
             </button>
           );
           return (
-            <div key={i} className="rounded-xl p-3" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
-              <div className="flex items-start justify-between gap-2 mb-2">
+            <div key={i} ref={rowRef(i)} className="rounded-xl p-3" style={{ background: C.surface, border: `1px solid ${C.line}`, ...lift }}>
+              {/* Тянут за заголовок, а не за всю карточку: иначе долгое
+                  нажатие на поле ввода мешало бы выделять текст. */}
+              <div className="flex items-start justify-between gap-2 mb-2" {...handlers(i)}
+                style={{ touchAction: dragging ? "none" : undefined }}>
                 <div className="min-w-0">
                   <div className="f-body text-sm font-medium" style={{ color: C.chalk }}>{ex.name}{ex.uni && <UniTag />}{ex.pair && <PairTag />}<RiskMark name={ex.name} conditions={conditions} /></div>
                   {/* Одна служебная строка вместо трёх: что было в прошлый раз
@@ -903,8 +920,26 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
           <div className="f-display text-base font-semibold mb-3" style={{ color: C.chalk }}>{session.exercises[sheet].name}</div>
           <div className="f-body text-xs mb-2" style={{ color: C.dim }}>Как прошло</div>
           <TagPicker tags={session.exercises[sheet].tags} onToggle={(id) => toggleTag(sheet, id)} />
+          {/* Долгое нажатие есть не у всех — кому оно не даётся, переставит
+              кнопками. То же решение, что и в редакторе дней. */}
+          <div className="f-body text-xs mt-4 mb-2" style={{ color: C.dim }}>Порядок в тренировке</div>
+          <div className="flex gap-2">
+            <button onClick={() => { moveExercise(sheet, sheet - 1); setSheet(sheet - 1); }} disabled={sheet === 0}
+              aria-label="Переместить упражнение выше"
+              className="f-body flex-1 rounded-xl py-3 text-sm flex items-center justify-center gap-2"
+              style={{ background: C.surfaceHi, color: sheet === 0 ? C.dim : C.chalk, border: `1px solid ${C.line}`, opacity: sheet === 0 ? 0.5 : 1 }}>
+              <ChevronUp size={15} /> выше
+            </button>
+            <button onClick={() => { moveExercise(sheet, sheet + 1); setSheet(sheet + 1); }} disabled={sheet === session.exercises.length - 1}
+              aria-label="Переместить упражнение ниже"
+              className="f-body flex-1 rounded-xl py-3 text-sm flex items-center justify-center gap-2"
+              style={{ background: C.surfaceHi, color: sheet === session.exercises.length - 1 ? C.dim : C.chalk, border: `1px solid ${C.line}`, opacity: sheet === session.exercises.length - 1 ? 0.5 : 1 }}>
+              <ChevronDown size={15} /> ниже
+            </button>
+          </div>
+
           <button onClick={() => { const n = session.exercises[sheet].name; setSheet(null); setInfo(n); }}
-            className="f-body w-full mt-4 rounded-xl py-3 text-sm flex items-center justify-center gap-2"
+            className="f-body w-full mt-2 rounded-xl py-3 text-sm flex items-center justify-center gap-2"
             style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
             <Info size={15} /> Техника и замены
           </button>
@@ -2059,13 +2094,13 @@ export default function App() {
      длинного журнала открывался с середины базы. Каждый раздел начинается
      сверху — так же, как если бы его открыли впервые. */
   const scroller = useRef(null);
-  useEffect(() => { scroller.current?.scrollTo(0, 0); }, [shownTab]);
   const [baseView, setBaseView] = useState(null);
   const [workouts, setWorkouts] = useState([]);
   const [metrics, setMetrics] = useState([]);
   const [days, setDaysState] = useState([]);
   const [session, setSessionState] = useState(null);
   const [profile, setProfileState] = useState({ height: "", age: "", sex: "m", activity: "1.55", conditions: [] });
+  useEffect(() => { scroller.current?.scrollTo(0, 0); }, [shownTab, session?.id]);
   const [showSettings, setShowSettings] = useState(false);
   const [exportText, setExportText] = useState(null);
   const [importText, setImportText] = useState(null);
@@ -2076,12 +2111,18 @@ export default function App() {
   const [accepted, setAccepted] = useState(null); // null — ещё не прочитали из хранилища
   const [setupSeen, setSetupSeen] = useState(true); // до чтения из хранилища не мигаем экраном
   const [showTerms, setShowTerms] = useState(false);
+  const [pairFixed, setPairFixed] = useState(0);
   const [updating, setUpdating] = useState(false);
   const fileInput = useRef(null);
 
   useEffect(() => {
     (async () => {
-      setWorkouts((await loadKey("workouts")) || []);
+      /* Записи, сделанные до правила «две гантели», считались вполовину.
+         Доводим до общего знаменателя один раз и говорим об этом вслух:
+         цифры в журнале поменяются, и человек должен понимать почему. */
+      const { workouts: fixed, touched } = fillPairFlags((await loadKey("workouts")) || []);
+      setWorkouts(fixed);
+      if (touched) { saveKey("workouts", fixed); setPairFixed(touched); }
       setMetrics((await loadKey("metrics")) || []);
       const d = await loadKey("days");
       if (d && d.length) setDaysState(d); else { setDaysState(DEFAULT_DAYS); saveKey("days", DEFAULT_DAYS); }
@@ -2422,6 +2463,26 @@ export default function App() {
 
       {/* невидимый выбор файла — открывает «Файлы» на iPhone и проводник на компьютере */}
       <input ref={fileInput} type="file" accept="application/json,.json,text/plain" onChange={pickBackupFile} className="hidden" />
+
+      {/* Пересчёт трогает уже записанное — об этом нельзя молчать
+          и нельзя сказать исчезающей подсказкой. */}
+      {pairFixed > 0 && (
+        <Sheet onClose={() => setPairFixed(0)}>
+          <div className="f-display text-base font-semibold mb-2" style={{ color: C.chalk }}>Тоннаж пересчитан</div>
+          <div className="f-body text-sm leading-relaxed mb-3" style={{ color: C.chalk }}>
+            В {pairFixed} {pairFixed === 1 ? "записи" : "записях"} упражнения с двумя гантелями
+            считались как одна — в поле веса стоит вес одного снаряда, а работа делается двумя.
+            Приложение довело их до общего знаменателя.
+          </div>
+          <div className="f-body text-xs mb-3" style={{ color: C.dim }}>
+            Числа в журнале и на графиках у этих тренировок выросли примерно вдвое по гантельным
+            упражнениям. Это не рост результатов — это исправление счёта: раньше на графике
+            возникала ступенька там, где в зале ничего не менялось.
+          </div>
+          <button onClick={() => setPairFixed(0)} className="f-display w-full rounded-xl py-3 text-sm font-semibold"
+            style={{ background: C.red, color: C.chalk }}>Понятно</button>
+        </Sheet>
+      )}
 
       {toast && (
         <div className="fixed left-1/2 -translate-x-1/2 z-[60] rounded-full px-4 py-2 f-body text-xs pointer-events-none"

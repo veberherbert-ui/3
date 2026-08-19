@@ -235,6 +235,22 @@ await page.getByRole("button", { name: "Готово" }).click();
 await page.waitForTimeout(600);
 const after = await page.locator("button:has-text('+ подход')").count();
 ok(after === before + 1, "упражнение добавилось в идущую тренировку", `${before} → ${after}`);
+
+/* Порядок упражнений — занят тренажёр, значит меняем на ходу. Тянут
+   долгим нажатием; кнопки в листе «ещё» — тот же результат для тех,
+   кому жест не даётся, и единственный способ проверить это тестом. */
+const order = () => page.evaluate(() =>
+  [...document.querySelectorAll('[role="tabpanel"] .f-body.text-sm.font-medium')].map((e) => e.textContent.trim()));
+const beforeOrder = await order();
+await page.getByRole("button", { name: /метки, техника, убрать/ }).first().click();
+await page.waitForTimeout(500);
+await page.getByRole("button", { name: "Переместить упражнение ниже" }).click();
+await page.waitForTimeout(400);
+await page.getByRole("button", { name: "Закрыть", exact: true }).click();
+await page.waitForTimeout(400);
+const afterOrder = await order();
+ok(afterOrder[0] === beforeOrder[1] && afterOrder[1] === beforeOrder[0], "упражнение переставляется в тренировке",
+  `${beforeOrder[0]} ↔ ${beforeOrder[1]}`);
 await page.locator('button[aria-label="Ещё действия"]').first().click();
 await page.waitForTimeout(500);
 await page.getByRole("button", { name: /Прервать без сохранения/ }).click();
