@@ -2,39 +2,35 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 /* Перетаскивание упражнений в идущей тренировке.
 
-   Занят тренажёр — упражнение откладывают на потом, и порядок в списке
-   должен это уметь. Обычный drag на телефоне не годится: список
-   прокручивается, и палец, начавший тянуть карточку, уводит вместе с ней
-   всю страницу.
+   Занят тренажёр — упражнение откладывают на потом, и порядок должен это
+   уметь. Первая попытка была через долгое нажатие на карточку, и она
+   не работала: на телефоне прокрутка начинается в компоновщике браузера
+   раньше, чем скрипт успевает её отменить, поэтому палец уводил страницу
+   вместе с карточкой. preventDefault здесь опаздывает по своей природе.
 
-   Поэтому — долгое нажатие. Полсекунды держим палец на месте, и только
-   тогда карточка «отрывается»; до этого жест принадлежит прокрутке.
-   Так же ведёт себя перестановка иконок в iOS, и объяснять её не нужно.
+   Единственное надёжное решение — отдельная ручка, у которой прокрутка
+   отключена заранее: touch-action: none стоит на ней всегда, а не
+   включается по ходу жеста. Заодно исчезает скрытый жест: ручку видно,
+   и по ней понятно, что карточку можно двигать.
 
-   Пока карточка едет, страница не скроллится (touch-action: none на время
-   захвата), а список у краёв экрана подкручивается сам — иначе в длинной
-   тренировке нельзя перенести упражнение с конца в начало. */
+   Пока карточка едет, список у краёв экрана подкручивается сам — иначе
+   в длинной тренировке нельзя перенести упражнение с конца в начало. */
 
-const HOLD_MS = 500;
-const MOVE_TOLERANCE = 10; /* палец дрогнул — это ещё не отмена захвата */
+const GRAB_TOLERANCE = 4; /* палец дрогнул на тапе — это ещё не перетаскивание */
 const EDGE = 90; /* от края экрана начинается автопрокрутка */
 const EDGE_SPEED = 12;
 
 export function useDragOrder(count, onMove) {
   const [drag, setDrag] = useState(null); // { from, to, y }
-  const hold = useRef(null);
   const start = useRef(null);
   const scroller = useRef(null);
   const rowsRef = useRef([]);
   const raf = useRef(0);
   const moved = useRef(false);
 
-  const cancelHold = () => { clearTimeout(hold.current); hold.current = null; };
-
   const stopAutoScroll = () => { cancelAnimationFrame(raf.current); raf.current = 0; };
 
   const finish = useCallback(() => {
-    cancelHold();
     stopAutoScroll();
     const s = start.current;
     if (s?.el && s.id != null) {
@@ -42,8 +38,6 @@ export function useDragOrder(count, onMove) {
     }
     setDrag((d) => {
       if (d) {
-        /* Отпустили после перетаскивания — следующий click гасим, иначе
-           карточка ещё и раскроется под пальцем. */
         moved.current = true;
         setTimeout(() => { moved.current = false; }, 0);
         if (d.to !== d.from) onMove(d.from, d.to);
@@ -53,9 +47,8 @@ export function useDragOrder(count, onMove) {
     start.current = null;
   }, [onMove]);
 
-  /* Куда попадёт карточка, если отпустить палец сейчас. Считаем по
-     серединам соседних строк — так порядок меняется ровно тогда, когда
-     карточка визуально перевалила за соседа. */
+  /* Куда попадёт карточка, если отпустить палец сейчас. Считаем по серединам
+     строк — порядок меняется ровно тогда, когда карточка перевалила соседа. */
   const indexAt = (y) => {
     const rows = rowsRef.current.filter(Boolean);
     for (let i = 0; i < rows.length; i++) {
@@ -81,46 +74,46 @@ export function useDragOrder(count, onMove) {
     raf.current = requestAnimationFrame(step);
   }, []);
 
-  useEffect(() => () => { cancelHold(); stopAutoScroll(); }, []);
+  useEffect(() => () => stopAutoScroll(), []);
 
-  /** Измеряем всю карточку — ref вешается на её корень. */
+  /** Ref на корень карточки — по нему меряются позиции. */
   const rowRef = (index) => (el) => { rowsRef.current[index] = el; };
 
-  /** Жест вешается на заголовок карточки: за него и тянут. */
-  const handlers = (index) => ({
+  /**
+   * Свойства для ручки перетаскивания. touchAction: "none" обязателен
+   * и обязан стоять до начала жеста — иначе прокрутка выигрывает.
+   */
+  const handleProps = (index) => ({
+    style: { touchAction: "none" },
     onPointerDown: (e) => {
       if (e.pointerType === "mouse" && e.button !== 0) return;
+      e.preventDefault();
       const el = e.currentTarget;
-      const id = e.pointerId;
-      start.current = { x: e.clientX, y: e.clientY, el, id };
+      start.current = { x: e.clientX, y: e.clientY, el, id: e.pointerId, index, armed: false };
       scroller.current = el.closest('[role="tabpanel"]');
-      hold.current = setTimeout(() => {
-        /* Захват указателя ставим только здесь. Поставить его сразу нельзя:
-           заголовок перехватил бы и обычный тап, и кнопка «ещё» внутри него
-           перестала бы нажиматься. */
-        try { el.setPointerCapture(id); } catch { /* не критично */ }
-        try { navigator.vibrate?.(8); } catch { /* не везде есть */ }
-        setDrag({ from: index, to: index, y: start.current.y });
-      }, HOLD_MS);
+      try { el.setPointerCapture(e.pointerId); } catch { /* не критично */ }
     },
     onPointerMove: (e) => {
-      if (!drag) {
-        /* Палец поехал раньше, чем сработало удержание — значит человек
-           хотел прокрутить список, а не переставить карточку. */
-        if (start.current && Math.hypot(e.clientX - start.current.x, e.clientY - start.current.y) > MOVE_TOLERANCE) cancelHold();
+      const s = start.current;
+      if (!s) return;
+      const y = e.clientY;
+      if (!s.armed) {
+        /* Ждём небольшого сдвига: иначе случайный тап по ручке считался бы
+           перетаскиванием и карточка дёргалась бы без причины. */
+        if (Math.hypot(e.clientX - s.x, y - s.y) < GRAB_TOLERANCE) return;
+        s.armed = true;
+        try { navigator.vibrate?.(8); } catch { /* не везде есть */ }
+        setDrag({ from: s.index, to: s.index, y });
         return;
       }
-      e.preventDefault();
-      const y = e.clientY;
       setDrag((d) => (d ? { ...d, y, to: indexAt(y) } : d));
       autoScroll(y);
     },
     onPointerUp: finish,
     onPointerCancel: finish,
-    onContextMenu: (e) => { if (drag) e.preventDefault(); },
   });
 
-  return { drag, handlers, rowRef, dragging: drag !== null, didDrag: () => moved.current };
+  return { drag, handleProps, rowRef, dragging: drag !== null, didDrag: () => moved.current };
 }
 
 /** Переставить элемент массива, не мутируя исходный. */

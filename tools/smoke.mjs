@@ -236,11 +236,29 @@ await page.waitForTimeout(600);
 const after = await page.locator("button:has-text('+ подход')").count();
 ok(after === before + 1, "упражнение добавилось в идущую тренировку", `${before} → ${after}`);
 
-/* Порядок упражнений — занят тренажёр, значит меняем на ходу. Тянут
-   долгим нажатием; кнопки в листе «ещё» — тот же результат для тех,
-   кому жест не даётся, и единственный способ проверить это тестом. */
+/* Порядок упражнений — занят тренажёр, значит меняем на ходу.
+   Тянут за ручку слева: у неё touch-action отключён заранее, иначе на
+   телефоне прокрутка выигрывает у жеста и карточка никуда не едет. */
 const order = () => page.evaluate(() =>
   [...document.querySelectorAll('[role="tabpanel"] .f-body.text-sm.font-medium')].map((e) => e.textContent.trim()));
+const grips = () => page.evaluate(() =>
+  [...document.querySelectorAll('[role="tabpanel"] span[aria-hidden="true"]')]
+    .filter((e) => e.style.touchAction === "none")
+    .map((e) => { const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, ta: getComputedStyle(e).touchAction, w: Math.round(r.width), h: Math.round(r.height) }; }));
+const g = await grips();
+ok(g.length > 1 && g[0].ta === "none", "у карточек есть ручка перетаскивания без прокрутки", g[0]?.ta);
+ok(g[0].w >= 30 && g[0].h >= 44, "в ручку можно попасть пальцем", `${g[0].w}×${g[0].h}`);
+const dragBefore = await order();
+await page.mouse.move(g[0].x, g[0].y);
+await page.mouse.down();
+await page.mouse.move(g[0].x, g[0].y + 20, { steps: 3 });
+await page.mouse.move(g[1].x, g[1].y + 30, { steps: 12 });
+await page.mouse.up();
+await page.waitForTimeout(500);
+const dragAfter = await order();
+ok(dragAfter[0] === dragBefore[1], "перетаскивание за ручку меняет порядок", `${dragBefore[0]} → ${dragAfter[0]}`);
+
+/* Кнопки в листе «ещё» — тот же результат для тех, кому жест не даётся. */
 const beforeOrder = await order();
 await page.getByRole("button", { name: /метки, техника, убрать/ }).first().click();
 await page.waitForTimeout(500);
@@ -336,6 +354,10 @@ const prog = await page.locator('[role="tabpanel"]').innerText();
    из ста одного и одну метрику из четырёх. */
 for (const part of ["Что растёт, что стоит", "Объём по неделям", "Неделя по мышцам", "Сравнить тренировки", "Рекорды"])
   ok(prog.includes(part), `на графиках есть раздел «${part.toLowerCase()}»`);
+/* Сравнение молчит, пока его не спросили: раньше оно вываливало три десятка
+   цифр сразу, из которых половина говорила «так же». */
+ok(prog.includes("Выбери день…") || prog.includes("Сравнивать пока нечего"), "сравнение по умолчанию пустое");
+ok(!/ВЫРОСЛО|ПРОСЕЛО/.test(prog), "цифры сравнения не показываются без выбора");
 ok(!(await page.getByRole("combobox", { name: "Упражнение для графика" }).isVisible().catch(() => false)),
   "выпадающего списка на 101 упражнение больше нет");
 const mover = page.locator('[role="tabpanel"] button').filter({ hasText: /стоит|растёт|просело|был один раз/ }).first();

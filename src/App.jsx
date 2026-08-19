@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue, lazy, Suspense } from "react";
-import { Plus, X, TrendingUp, BookOpen, Dumbbell, Flame, Settings, Trash2, Check, Info, Play, Timer, Calculator, Copy, ExternalLink, Activity, Pause, ChevronDown, ChevronUp, MoreHorizontal, Search, Library, Layers, Pencil, RotateCcw, Download, Upload, Share2, HardDrive, ShieldAlert, TriangleAlert, HeartPulse, Repeat2, Volume2, VolumeX, RefreshCw, FileText, Type, CalendarPlus, Tag } from "lucide-react";
+import { Plus, X, TrendingUp, BookOpen, Dumbbell, Flame, Settings, Trash2, Check, Info, Play, Timer, Calculator, Copy, ExternalLink, Activity, Pause, ChevronDown, ChevronUp, MoreHorizontal, Search, Library, Layers, Pencil, RotateCcw, Download, Upload, Share2, HardDrive, ShieldAlert, TriangleAlert, HeartPulse, Repeat2, Volume2, VolumeX, RefreshCw, FileText, Type, CalendarPlus, Tag, GripVertical } from "lucide-react";
 
 import { EXDB, GROUPS, PRESETS, DEFAULT_DAYS, isUni, isBW, isPair, GEAR, GEAR_PRESETS, fitsGear, moveOf, variantsOf } from "./data/exercises.js";
 import { CONDITIONS, CONDITION_BY_ID, helpfulNote } from "./data/conditions.js";
@@ -61,6 +61,14 @@ const CalcLine = ({ k, v, hint }) => (
         на три рваные строки и читается хуже самой цифры. */}
     {hint && <div className="f-body text-2xs mt-0.5" style={{ color: C.dim }}>{hint}</div>}
   </div>
+);
+/** Ручка перетаскивания: видимая и достаточно крупная, чтобы попасть пальцем. */
+const Grip = (props) => (
+  <span {...props} aria-hidden="true"
+    className="shrink-0 flex items-center justify-center cursor-grab select-none"
+    style={{ width: 34, minHeight: 44, ...props.style }}>
+    <GripVertical size={18} color={C.line} />
+  </span>
 );
 const UniTag = () => (
   <span className="f-body text-2xs rounded px-1 py-0.5 ml-1 align-middle" style={{ background: C.blue, color: C.chalk }}>×2</span>
@@ -663,7 +671,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
   /* объявлено до раннего возврата ниже — хуки нельзя вызывать под условием */
   const moveExercise = useCallback((from, to) =>
     setSession((s) => ({ ...s, exercises: moveItem(s.exercises, from, to) })), [setSession]);
-  const { drag, handlers, rowRef, dragging, didDrag } = useDragOrder(session?.exercises?.length || 0, moveExercise);
+  const { drag, handleProps, rowRef, dragging, didDrag } = useDragOrder(session?.exercises?.length || 0, moveExercise);
   const clearRest = useCallback(() => setSession((s) => (s?.rest ? { ...s, rest: null } : s)), [setSession]);
 
   /* пока идёт тренировка, экран не гаснет */
@@ -891,24 +899,28 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
               ? { borderColor: C.blue }
               : null;
           if (packed) return (
-            <button key={i} ref={rowRef(i)} {...handlers(i)} onClick={() => { if (!dragging && !didDrag()) setOpened((o) => ({ ...o, [ex.name]: true })); }}
-              className="w-full text-left rounded-xl px-3 py-2.5 flex items-center gap-2"
-              style={{ background: C.surface, border: `1px solid ${C.line}`, touchAction: dragging ? "none" : undefined, ...lift }}>
-              <Check size={16} color={C.moss} className="shrink-0" />
-              <span className="min-w-0 flex-1">
-                <span className="f-body text-sm block truncate" style={{ color: C.dim }}>{ex.name}</span>
-                <span className="f-num text-2xs block truncate" style={{ color: C.dim }}>{setsLine(ex)}</span>
-              </span>
-              {ex.tags?.length > 0 && <span className="f-body text-2xs shrink-0" style={{ color: ex.tags.includes("pain") ? C.redText : C.mustard }}>{tagLine(ex.tags)}</span>}
-            </button>
+            <div key={i} ref={rowRef(i)} className="rounded-xl flex items-center"
+              style={{ background: C.surface, border: `1px solid ${C.line}`, ...lift }}>
+              <Grip {...handleProps(i)} />
+              <button onClick={() => { if (!didDrag()) setOpened((o) => ({ ...o, [ex.name]: true })); }}
+                className="flex-1 min-w-0 text-left py-2.5 pr-3 flex items-center gap-2">
+                <Check size={16} color={C.moss} className="shrink-0" />
+                <span className="min-w-0 flex-1">
+                  <span className="f-body text-sm block truncate" style={{ color: C.dim }}>{ex.name}</span>
+                  <span className="f-num text-2xs block truncate" style={{ color: C.dim }}>{setsLine(ex)}</span>
+                </span>
+                {ex.tags?.length > 0 && <span className="f-body text-2xs shrink-0" style={{ color: ex.tags.includes("pain") ? C.redText : C.mustard }}>{tagLine(ex.tags)}</span>}
+              </button>
+            </div>
           );
           return (
-            <div key={i} ref={rowRef(i)} className="rounded-xl p-3" style={{ background: C.surface, border: `1px solid ${C.line}`, ...lift }}>
-              {/* Тянут за заголовок, а не за всю карточку: иначе долгое
-                  нажатие на поле ввода мешало бы выделять текст. */}
-              <div className="flex items-start justify-between gap-2 mb-2" {...handlers(i)}
-                style={{ touchAction: dragging ? "none" : undefined }}>
-                <div className="min-w-0">
+            <div key={i} ref={rowRef(i)} className="rounded-xl pt-1 pb-3 px-3" style={{ background: C.surface, border: `1px solid ${C.line}`, ...lift }}>
+              <div className="flex items-start justify-between gap-1 mb-2">
+                {/* Ручка слева: у неё прокрутка отключена заранее, поэтому
+                    жест не спорит с листанием списка. И её видно — понятно,
+                    что карточку можно двигать. */}
+                <Grip {...handleProps(i)} />
+                <div className="min-w-0 flex-1 pt-2">
                   <div className="f-body text-sm font-medium" style={{ color: C.chalk }}>{ex.name}{ex.uni && <UniTag />}{ex.pair && <PairTag />}<RiskMark name={ex.name} conditions={conditions} /></div>
                   {/* Одна служебная строка вместо трёх: что было в прошлый раз
                       и сколько отдыхать — остальное убрано под «ещё». */}
@@ -1771,7 +1783,15 @@ function VolumeBars({ weeks }) {
   );
 }
 
-/** Две тренировки одного дня рядом: что выросло, что просело, что пропало. */
+/** Две тренировки одного дня рядом: что выросло, что просело, что пропало.
+
+    Первая версия вываливала всё сразу: шесть строк итогов и по две строки
+    на каждое упражнение — под тридцать рядов цифр, из которых половина
+    говорила «так же». Читать это невозможно, и на приложение оно не похоже.
+
+    Теперь наоборот: по умолчанию пусто, выбор можно снять, а показывается
+    только то, что изменилось. Полный протокол с подходами остаётся, но
+    за кнопкой — он нужен, когда уже понял, куда смотреть. */
 function CompareCard({ workouts, metrics, bmr, restOverrides, bodyAt }) {
   const days = useMemo(() => {
     const by = new Map();
@@ -1783,14 +1803,16 @@ function CompareCard({ workouts, metrics, bmr, restOverrides, bodyAt }) {
   }, [workouts]);
 
   const [day, setDay] = useState("");
-  const list = days.find(([d]) => d === day)?.[1] || days[0]?.[1] || [];
   const [aId, setAId] = useState("");
   const [bId, setBId] = useState("");
-  const A = list.find((w) => w.id === aId) || list[1];
-  const B = list.find((w) => w.id === bId) || list[0];
+  const [full, setFull] = useState(false);
+
+  const list = days.find(([d]) => d === day)?.[1] || [];
+  const A = list.find((w) => w.id === aId);
+  const B = list.find((w) => w.id === bId);
 
   const diff = useMemo(
-    () => (A && B ? compare(A, B, { metrics, bmr, restOverrides, bodyAt }) : null),
+    () => (A && B && A !== B ? compare(A, B, { metrics, bmr, restOverrides, bodyAt }) : null),
     [A, B, metrics, bmr, restOverrides, bodyAt],
   );
 
@@ -1802,63 +1824,111 @@ function CompareCard({ workouts, metrics, bmr, restOverrides, bodyAt }) {
     );
   }
 
-  const Line = ({ k, a, b, unit = "", better = 1 }) => {
+  const pickDay = (v) => { setDay(v); setAId(""); setBId(""); setFull(false); };
+  const sel = "f-body rounded-lg px-3 py-2.5 text-sm";
+  const selStyle = { background: C.surface, color: C.chalk, border: `1px solid ${C.line}` };
+
+  /* Итог одной строкой: цифра и куда она сдвинулась. Шесть таких строк
+     вместо таблицы на полэкрана. */
+  const Row = ({ k, a, b, unit = "", better = 1 }) => {
     if (a == null && b == null) return null;
     const d = a != null && b != null ? r1(b - a) : null;
     return (
-      <div className="flex items-baseline justify-between gap-2 py-1" style={{ borderTop: `1px solid ${C.line}` }}>
+      <div className="flex items-baseline justify-between gap-2 py-1.5" style={{ borderTop: `1px solid ${C.line}` }}>
         <span className="f-body text-xs" style={{ color: C.dim }}>{k}</span>
-        <span className="f-num text-xs" style={{ color: C.chalk }}>
-          {a ?? "—"} → {b ?? "—"} {unit}
-          {d ? <span style={{ color: d * better > 0 ? C.mossText : C.redText }}> {d > 0 ? "+" : ""}{d}</span> : null}
+        <span className="f-num text-sm" style={{ color: C.chalk }}>
+          {b ?? "—"}{unit ? ` ${unit}` : ""}
+          {d ? <span className="text-2xs" style={{ color: d * better > 0 ? C.mossText : C.redText }}> {d > 0 ? "+" : ""}{d}</span> : null}
         </span>
       </div>
     );
   };
 
+  /* Сгруппированные изменения: одна строка на категорию вместо строки
+     на упражнение. «Так же» не показываем вовсе — это и есть шум. */
+  const Group = ({ label, items, color }) => {
+    if (!items.length) return null;
+    return (
+      <div className="py-1.5" style={{ borderTop: `1px solid ${C.line}` }}>
+        <div className="f-body text-2xs uppercase tracking-wide mb-0.5" style={{ color }}>{label}</div>
+        <div className="f-body text-xs leading-relaxed" style={{ color: C.chalk }}>{items.join(" · ")}</div>
+      </div>
+    );
+  };
+
+  const short = (n) => n.replace(/\s*\(.*?\)/g, "");
+  const grew = diff?.rows.filter((r) => r.kind === "both" && (r.dw > 0 || (!r.dw && r.dr > 0)))
+    .map((r) => `${short(r.name)} ${r.dw ? `+${r.dw} ${r.unit}` : `+${r.dr} повт`}`) || [];
+  const fell = diff?.rows.filter((r) => r.kind === "both" && (r.dw < 0 || (!r.dw && r.dr < 0)))
+    .map((r) => `${short(r.name)} ${r.dw ? `${r.dw} ${r.unit}` : `${r.dr} повт`}`) || [];
+  const same = diff?.rows.filter((r) => r.kind === "both" && !r.dw && !r.dr).length || 0;
+
   return (
     <div>
-      <select value={day || days[0][0]} onChange={(e) => { setDay(e.target.value); setAId(""); setBId(""); }}
-        aria-label="День для сравнения" className="f-body w-full rounded-lg px-3 py-2.5 text-sm mb-2"
-        style={{ background: C.surface, color: C.chalk, border: `1px solid ${C.line}` }}>
+      <select value={day} onChange={(e) => pickDay(e.target.value)} aria-label="День для сравнения"
+        className={`${sel} w-full`} style={selStyle}>
+        <option value="">Выбери день…</option>
         {days.map(([d, l]) => <option key={d} value={d}>{d} — {l.length} тренировок</option>)}
       </select>
-      <div className="flex gap-2">
-        <select value={A?.id || ""} onChange={(e) => setAId(e.target.value)} aria-label="Что было"
-          className="f-body flex-1 min-w-0 rounded-lg px-2 py-2 text-xs" style={{ background: C.surface, color: C.chalk, border: `1px solid ${C.line}` }}>
-          {list.map((w) => <option key={w.id} value={w.id}>{fmtDate(w.date)}</option>)}
-        </select>
-        <span className="f-body text-xs self-center" style={{ color: C.dim }}>→</span>
-        <select value={B?.id || ""} onChange={(e) => setBId(e.target.value)} aria-label="Что стало"
-          className="f-body flex-1 min-w-0 rounded-lg px-2 py-2 text-xs" style={{ background: C.surface, color: C.chalk, border: `1px solid ${C.line}` }}>
-          {list.map((w) => <option key={w.id} value={w.id}>{fmtDate(w.date)}</option>)}
-        </select>
-      </div>
 
-      {diff && A?.id !== B?.id && (
+      {day && (
+        <div className="flex gap-2 mt-2">
+          <select value={aId} onChange={(e) => setAId(e.target.value)} aria-label="С чем сравнить"
+            className={`${sel} flex-1 min-w-0`} style={selStyle}>
+            <option value="">было…</option>
+            {list.map((w) => <option key={w.id} value={w.id}>{fmtDate(w.date)}</option>)}
+          </select>
+          <span className="f-body text-xs self-center" style={{ color: C.dim }}>→</span>
+          <select value={bId} onChange={(e) => setBId(e.target.value)} aria-label="Что сравнить"
+            className={`${sel} flex-1 min-w-0`} style={selStyle}>
+            <option value="">стало…</option>
+            {list.map((w) => <option key={w.id} value={w.id}>{fmtDate(w.date)}</option>)}
+          </select>
+        </div>
+      )}
+
+      {day && !diff && (
+        <div className="f-body text-xs mt-2" style={{ color: C.dim }}>
+          {A && B ? "Это одна и та же тренировка — выбери две разные." : "Выбери две даты."}
+        </div>
+      )}
+
+      {diff && (
         <div className="mt-3">
-          <Line k="Подходов" a={diff.a.sets} b={diff.b.sets} />
-          <Line k="Тоннаж" a={diff.a.tonnage} b={diff.b.tonnage} unit="кг" />
-          <Line k="Длительность" a={diff.a.minutes} b={diff.b.minutes} unit="мин" />
-          <Line k="Под нагрузкой" a={diff.a.load} b={diff.b.load} unit="мин" />
-          <Line k="Сверх покоя" a={diff.a.kcal} b={diff.b.kcal} unit="ккал" />
-          <Line k="Вес тела" a={diff.a.body} b={diff.b.body} unit="кг" better={0} />
+          <Row k="Подходов" a={diff.a.sets} b={diff.b.sets} />
+          <Row k="Тоннаж" a={diff.a.tonnage} b={diff.b.tonnage} unit="кг" />
+          <Row k="Длительность" a={diff.a.minutes} b={diff.b.minutes} unit="мин" />
+          <Row k="Сверх покоя" a={diff.a.kcal} b={diff.b.kcal} unit="ккал" />
 
-          <div className="f-body text-xs uppercase tracking-wide mt-3 mb-1" style={{ color: C.dim }}>По упражнениям</div>
-          {diff.rows.map((r) => (
-            <div key={r.name} className="py-1.5" style={{ borderTop: `1px solid ${C.line}` }}>
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="f-body text-xs min-w-0" style={{ color: r.kind === "gone" ? C.dim : C.chalk }}>{r.name}</span>
-                <span className="f-body text-2xs shrink-0" style={{ color: r.kind === "new" ? C.mossText : r.kind === "gone" ? C.dim : r.dw > 0 ? C.mossText : r.dw < 0 ? C.redText : C.dim }}>
-                  {r.kind === "new" ? "новое" : r.kind === "gone" ? "не делал" : r.dw ? `${r.dw > 0 ? "+" : ""}${r.dw} ${r.unit}` : r.dr ? `${r.dr > 0 ? "+" : ""}${r.dr} повт` : "так же"}
-                </span>
+          <div className="mt-2">
+            <Group label="Выросло" items={grew} color={C.mossText} />
+            <Group label="Просело" items={fell} color={C.redText} />
+            <Group label="Новое" items={diff.rows.filter((r) => r.kind === "new").map((r) => short(r.name))} color={C.blueText} />
+            <Group label="Не делал" items={diff.rows.filter((r) => r.kind === "gone").map((r) => short(r.name))} color={C.dim} />
+            {same > 0 && (
+              <div className="f-body text-2xs pt-1.5" style={{ color: C.dim, borderTop: `1px solid ${C.line}` }}>
+                без изменений: {same}
               </div>
-              {/* Каждая тренировка на своей строке: слитая в одну, эта пара
-                  превращается в кашу из цифр со стрелкой посередине. */}
-              <div className="f-num text-2xs" style={{ color: C.dim }}>{r.was || "—"}</div>
-              <div className="f-num text-2xs" style={{ color: r.kind === "gone" ? C.dim : C.chalk }}>{r.now || "—"}</div>
+            )}
+          </div>
+
+          <button onClick={() => setFull((v) => !v)} className="f-body w-full mt-2 py-2.5 text-xs" style={{ color: C.blueText }}>
+            {full ? "Свернуть подробности" : "Показать подходы"}
+          </button>
+
+          {full && (
+            <div>
+              <Row k="Под нагрузкой" a={diff.a.load} b={diff.b.load} unit="мин" />
+              <Row k="Вес тела" a={diff.a.body} b={diff.b.body} unit="кг" better={0} />
+              {diff.rows.map((r) => (
+                <div key={r.name} className="py-1.5" style={{ borderTop: `1px solid ${C.line}` }}>
+                  <div className="f-body text-xs" style={{ color: r.kind === "gone" ? C.dim : C.chalk }}>{r.name}</div>
+                  <div className="f-num text-2xs" style={{ color: C.dim }}>{r.was || "—"}</div>
+                  <div className="f-num text-2xs" style={{ color: r.kind === "gone" ? C.dim : C.chalk }}>{r.now || "—"}</div>
+                </div>
+              ))}
             </div>
-          ))}
+          )}
         </div>
       )}
     </div>
