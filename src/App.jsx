@@ -1,18 +1,18 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue, lazy, Suspense } from "react";
 import { Plus, X, TrendingUp, BookOpen, Dumbbell, Flame, Settings, Trash2, Check, Info, Play, Timer, Calculator, Copy, ExternalLink, Activity, Pause, ChevronDown, ChevronUp, MoreHorizontal, Search, Library, Layers, Pencil, RotateCcw, Download, Upload, Share2, HardDrive, ShieldAlert, TriangleAlert, HeartPulse, Repeat2, Volume2, VolumeX, RefreshCw, FileText, Type, CalendarPlus, Tag } from "lucide-react";
 
-import { EXDB, GROUPS, ALL_MUSCLES, PUSH_M, PULL_M, PRESETS, DEFAULT_DAYS, isUni, isBW, isPair, GEAR, GEAR_PRESETS, fitsGear } from "./data/exercises.js";
+import { EXDB, GROUPS, PRESETS, DEFAULT_DAYS, isUni, isBW, isPair, GEAR, GEAR_PRESETS, fitsGear } from "./data/exercises.js";
 import { CONDITIONS, CONDITION_BY_ID, helpfulNote } from "./data/conditions.js";
 import { TECHNIQUE } from "./data/technique.js";
 import { TAGS, TAG_BY_ID, tagLine } from "./data/tags.js";
 import { saferAlternatives, worstRisk, risksFor, dayWarnings } from "./lib/swap.js";
-import { C, plateColor } from "./lib/theme.js";
+import { C, plateColor, GROUP_COLOR } from "./lib/theme.js";
 import { today, daysAgo, fmtDate } from "./lib/dates.js";
 import {
   uid, r1, ytLink,
-  exTonnage, workoutTonnage, bwKg, addedKg, perRepKg, weightNear, topWeight, topReps, totalReps,
+  exTonnage, workoutTonnage, bwKg, addedKg, perRepKg, weightNear, topWeight, topReps,
   epley, brzycki, est1RM, readyToAdd,
-  bodyFatNavy, bmiOf, lbmOf, ffmiOf,
+  bodyFatNavy, bmrOf, bmiOf, lbmOf, ffmiOf,
 } from "./lib/calc.js";
 import { loadKey, saveKey, deleteKey, requestPersistence, storageEstimate } from "./lib/storage.js";
 import { fillPairFlags } from "./lib/migrate.js";
@@ -20,6 +20,7 @@ import { useDragOrder, moveItem } from "./lib/reorder.js";
 import { shareOrDownload, readFileAsText, backupName } from "./lib/backup.js";
 import { restFor, fmtRest, stepRest } from "./lib/rest.js";
 import { workoutEnergy } from "./lib/energy.js";
+import { summary, movers, weeklyVolume, muscleWeek, compare } from "./lib/progress.js";
 import { primeAudio, playRestOver, scheduleRestOver, cancelScheduled, vibrate, tapBuzz, releaseAudio, audioReady } from "./lib/sound.js";
 import { useWakeLock } from "./lib/wakelock.js";
 import { buildLabel, checkForUpdate, reloadOnUpdate } from "./lib/update.js";
@@ -30,7 +31,6 @@ import SetupGate from "./Setup.jsx";
 /* Графики грузятся отдельным куском: библиотека тяжёлая, а нужна только
    на двух вкладках из пяти. */
 const LineByDate = lazy(() => import("./Charts.jsx").then((m) => ({ default: m.LineByDate })));
-const BarByDate = lazy(() => import("./Charts.jsx").then((m) => ({ default: m.BarByDate })));
 
 /** Место под график, пока он подгружается — чтобы страница не дёргалась. */
 const ChartFrame = ({ children, height = 200 }) => (
@@ -1604,119 +1604,300 @@ function JournalTab({ workouts, onDelete, onExport, onUpdate, onAdd, days, condi
 }
 
 /* ============ PROGRESS ============ */
-const METRICS = [
-  { id: "weight", label: "Рабочий вес", unit: "кг" },
-  { id: "e1rm", label: "Расч. 1ПМ", unit: "кг" },
-  { id: "tonnage", label: "Тоннаж", unit: "кг" },
-  { id: "reps", label: "Повторения", unit: "" },
-];
-const RANGES = [{ id: 30, label: "30 дн" }, { id: 90, label: "90 дн" }, { id: 9999, label: "всё" }];
+/* ============ ГРАФИКИ ============ */
 
-function ProgressTab({ workouts, bodyAt }) {
-  const [view, setView] = useState("exercise");
-  const names = useMemo(() => { const s = new Set(); workouts.forEach((w) => w.exercises.forEach((e) => s.add(e.name))); return [...s].sort(); }, [workouts]);
-  const [sel, setSel] = useState("");
-  const [metric, setMetric] = useState("weight");
-  const [range, setRange] = useState(90);
-  useEffect(() => { if (!sel && names.length) setSel(names[0]); }, [names, sel]);
+const RANGES = [{ id: 30, label: "30 дн" }, { id: 90, label: "90 дн" }, { id: 3650, label: "всё" }];
 
-  const cutoff = useMemo(() => daysAgo(range), [range]);
-  const series = useMemo(() => [...workouts].filter((w) => w.date >= cutoff).sort((a, b) => a.date.localeCompare(b.date))
-    .map((w) => { const ex = w.exercises.find((e) => e.name === sel); return ex ? { date: fmtDate(w.date), weight: topWeight(ex), e1rm: est1RM(ex), tonnage: exTonnage(ex, bodyAt?.(w.date)) || null, reps: totalReps(ex) } : null; })
-    .filter(Boolean), [workouts, sel, cutoff]);
-  const totalSeries = useMemo(() => [...workouts].filter((w) => w.date >= cutoff).sort((a, b) => a.date.localeCompare(b.date)).map((w) => ({ date: fmtDate(w.date), tonnage: workoutTonnage(w, bodyAt?.(w.date)) })), [workouts, cutoff, bodyAt]);
+const STATE = {
+  down: { label: "просело", color: C.redText },
+  flat: { label: "стоит", color: C.mustard },
+  idle: { label: "давно не делал", color: C.dim },
+  up: { label: "растёт", color: C.mossText },
+  once: { label: "был один раз", color: C.dim },
+};
 
-  const volume = useMemo(() => {
-    const cur = daysAgo(7);
-    const prev = daysAgo(14);
-    const acc = {}; ALL_MUSCLES.forEach((m) => (acc[m] = { now: 0, before: 0 }));
-    let push = 0, pull = 0;
-    workouts.forEach((w) => {
-      const b = w.date >= cur ? "now" : w.date >= prev ? "before" : null; if (!b) return;
-      w.exercises.forEach((ex) => {
-        const m = EXDB[ex.name]?.m; if (!m || !acc[m]) return;
-        acc[m][b] += ex.sets.length;
-        if (b === "now") { if (PUSH_M.has(m)) push += ex.sets.length; if (PULL_M.has(m)) pull += ex.sets.length; }
-      });
+/** Крошечный график в строке: форма важнее значений, подписи не нужны. */
+function Spark({ points, color, w = 54, h = 20 }) {
+  if (!points || points.length < 2) return <span style={{ width: w }} className="shrink-0" />;
+  const vs = points.map((p) => p.v);
+  const min = Math.min(...vs);
+  const span = Math.max(...vs) - min || 1;
+  const step = w / (points.length - 1);
+  const d = points
+    .map((p, i) => `${i ? "L" : "M"}${(i * step).toFixed(1)},${(h - 2 - ((p.v - min) / span) * (h - 4)).toFixed(1)}`)
+    .join(" ");
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden="true" className="shrink-0">
+      <path d={d} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Плитка итога с изменением к прошлому такому же периоду. */
+function StatTile({ label, value, sub, delta, better = 1 }) {
+  const sign = delta > 0 ? "+" : "";
+  const color = !delta ? C.dim : delta * better > 0 ? C.mossText : C.redText;
+  return (
+    <div className="flex-1 rounded-xl px-3 py-2.5 min-w-0" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+      <div className="f-num text-lg font-semibold truncate" style={{ color: C.chalk }}>{value}</div>
+      <div className="f-body text-2xs uppercase tracking-wide truncate" style={{ color: C.dim }}>{label}</div>
+      {delta != null && (
+        <div className="f-num text-2xs mt-0.5" style={{ color }}>{delta ? `${sign}${delta}` : "без изменений"}{sub && delta ? ` ${sub}` : ""}</div>
+      )}
+    </div>
+  );
+}
+
+/** Строка упражнения: состояние, текущий вес, изменение и форма кривой. */
+function MoverRow({ row, open, onToggle }) {
+  const st = STATE[row.state];
+  const chart = useMemo(
+    () => row.points.map((p) => ({ date: fmtDate(p.date), v: p.v, tonnage: p.tonnage })),
+    [row.points],
+  );
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+      <button onClick={onToggle} className="w-full flex items-center gap-2.5 px-3 py-2.5 text-left">
+        <span className="min-w-0 flex-1">
+          <span className="f-body text-sm block truncate" style={{ color: C.chalk }}>{row.name}</span>
+          <span className="f-body text-2xs block" style={{ color: st.color }}>
+            {st.label}{row.state === "idle" ? ` · ${row.idle} дн` : row.delta ? ` · ${row.delta > 0 ? "+" : ""}${row.delta} ${row.unit}` : ""}
+          </span>
+        </span>
+        <Spark points={row.points.slice(-8)} color={st.color} />
+        <span className="f-num text-sm shrink-0" style={{ color: C.chalk }}>{row.value} {row.unit}</span>
+      </button>
+      {open && (
+        <div className="px-2 pb-2">
+          <ChartFrame height={180}>
+            <LineByDate data={chart} dataKey="v" name={`рабочий вес, ${row.unit}`} height={180} />
+          </ChartFrame>
+          <div className="f-body text-2xs px-1.5 pb-1" style={{ color: C.dim }}>
+            {row.muscle} · подходов за период: {row.times}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Подходы по неделям, стопкой по группам мышц. */
+function VolumeBars({ weeks }) {
+  const max = Math.max(1, ...weeks.map((w) => w.total));
+  const used = [...new Set(weeks.flatMap((w) => Object.keys(w.byGroup)))];
+  return (
+    <div>
+      <div className="flex items-end gap-1.5" style={{ height: 120 }}>
+        {weeks.map((w, i) => (
+          <div key={i} className="flex-1 flex flex-col justify-end h-full gap-px" title={`${w.total} подходов`}>
+            {Object.entries(w.byGroup).map(([g, n]) => (
+              <div key={g} style={{ height: `${(n / max) * 100}%`, background: GROUP_COLOR[g] || C.dim, minHeight: n ? 2 : 0 }} />
+            ))}
+            {!w.total && <div style={{ height: 2, background: C.line }} />}
+          </div>
+        ))}
+      </div>
+      <div className="flex gap-1.5 mt-1">
+        {weeks.map((w, i) => (
+          <div key={i} className="f-num text-2xs flex-1 text-center" style={{ color: w.total ? C.dim : C.line }}>{w.total || "—"}</div>
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
+        {used.map((g) => (
+          <span key={g} className="f-body text-2xs flex items-center gap-1" style={{ color: C.dim }}>
+            <span className="w-2.5 h-2.5 rounded-sm" style={{ background: GROUP_COLOR[g] || C.dim }} /> {g}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Две тренировки одного дня рядом: что выросло, что просело, что пропало. */
+function CompareCard({ workouts, metrics, bmr, restOverrides, bodyAt }) {
+  const days = useMemo(() => {
+    const by = new Map();
+    [...workouts].sort((a, b) => b.date.localeCompare(a.date)).forEach((w) => {
+      if (!by.has(w.dayLabel)) by.set(w.dayLabel, []);
+      by.get(w.dayLabel).push(w);
     });
-    return { rows: ALL_MUSCLES.map((m) => ({ m, ...acc[m] })).filter((r) => r.now || r.before), push, pull };
+    return [...by.entries()].filter(([, list]) => list.length > 1);
   }, [workouts]);
+
+  const [day, setDay] = useState("");
+  const list = days.find(([d]) => d === day)?.[1] || days[0]?.[1] || [];
+  const [aId, setAId] = useState("");
+  const [bId, setBId] = useState("");
+  const A = list.find((w) => w.id === aId) || list[1];
+  const B = list.find((w) => w.id === bId) || list[0];
+
+  const diff = useMemo(
+    () => (A && B ? compare(A, B, { metrics, bmr, restOverrides, bodyAt }) : null),
+    [A, B, metrics, bmr, restOverrides, bodyAt],
+  );
+
+  if (!days.length) {
+    return (
+      <div className="f-body text-xs" style={{ color: C.dim }}>
+        Сравнивать пока нечего: нужен один и тот же день, проведённый дважды.
+      </div>
+    );
+  }
+
+  const Line = ({ k, a, b, unit = "", better = 1 }) => {
+    if (a == null && b == null) return null;
+    const d = a != null && b != null ? r1(b - a) : null;
+    return (
+      <div className="flex items-baseline justify-between gap-2 py-1" style={{ borderTop: `1px solid ${C.line}` }}>
+        <span className="f-body text-xs" style={{ color: C.dim }}>{k}</span>
+        <span className="f-num text-xs" style={{ color: C.chalk }}>
+          {a ?? "—"} → {b ?? "—"} {unit}
+          {d ? <span style={{ color: d * better > 0 ? C.mossText : C.redText }}> {d > 0 ? "+" : ""}{d}</span> : null}
+        </span>
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      <select value={day || days[0][0]} onChange={(e) => { setDay(e.target.value); setAId(""); setBId(""); }}
+        aria-label="День для сравнения" className="f-body w-full rounded-lg px-3 py-2.5 text-sm mb-2"
+        style={{ background: C.surface, color: C.chalk, border: `1px solid ${C.line}` }}>
+        {days.map(([d, l]) => <option key={d} value={d}>{d} — {l.length} тренировок</option>)}
+      </select>
+      <div className="flex gap-2">
+        <select value={A?.id || ""} onChange={(e) => setAId(e.target.value)} aria-label="Что было"
+          className="f-body flex-1 min-w-0 rounded-lg px-2 py-2 text-xs" style={{ background: C.surface, color: C.chalk, border: `1px solid ${C.line}` }}>
+          {list.map((w) => <option key={w.id} value={w.id}>{fmtDate(w.date)}</option>)}
+        </select>
+        <span className="f-body text-xs self-center" style={{ color: C.dim }}>→</span>
+        <select value={B?.id || ""} onChange={(e) => setBId(e.target.value)} aria-label="Что стало"
+          className="f-body flex-1 min-w-0 rounded-lg px-2 py-2 text-xs" style={{ background: C.surface, color: C.chalk, border: `1px solid ${C.line}` }}>
+          {list.map((w) => <option key={w.id} value={w.id}>{fmtDate(w.date)}</option>)}
+        </select>
+      </div>
+
+      {diff && A?.id !== B?.id && (
+        <div className="mt-3">
+          <Line k="Подходов" a={diff.a.sets} b={diff.b.sets} />
+          <Line k="Тоннаж" a={diff.a.tonnage} b={diff.b.tonnage} unit="кг" />
+          <Line k="Длительность" a={diff.a.minutes} b={diff.b.minutes} unit="мин" />
+          <Line k="Под нагрузкой" a={diff.a.load} b={diff.b.load} unit="мин" />
+          <Line k="Сверх покоя" a={diff.a.kcal} b={diff.b.kcal} unit="ккал" />
+          <Line k="Вес тела" a={diff.a.body} b={diff.b.body} unit="кг" better={0} />
+
+          <div className="f-body text-xs uppercase tracking-wide mt-3 mb-1" style={{ color: C.dim }}>По упражнениям</div>
+          {diff.rows.map((r) => (
+            <div key={r.name} className="py-1.5" style={{ borderTop: `1px solid ${C.line}` }}>
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="f-body text-xs min-w-0" style={{ color: r.kind === "gone" ? C.dim : C.chalk }}>{r.name}</span>
+                <span className="f-body text-2xs shrink-0" style={{ color: r.kind === "new" ? C.mossText : r.kind === "gone" ? C.dim : r.dw > 0 ? C.mossText : r.dw < 0 ? C.redText : C.dim }}>
+                  {r.kind === "new" ? "новое" : r.kind === "gone" ? "не делал" : r.dw ? `${r.dw > 0 ? "+" : ""}${r.dw} ${r.unit}` : r.dr ? `${r.dr > 0 ? "+" : ""}${r.dr} повт` : "так же"}
+                </span>
+              </div>
+              {/* Каждая тренировка на своей строке: слитая в одну, эта пара
+                  превращается в кашу из цифр со стрелкой посередине. */}
+              <div className="f-num text-2xs" style={{ color: C.dim }}>{r.was || "—"}</div>
+              <div className="f-num text-2xs" style={{ color: r.kind === "gone" ? C.dim : C.chalk }}>{r.now || "—"}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProgressTab({ workouts, bodyAt, metrics, bmr, restOverrides }) {
+  const [range, setRange] = useState(90);
+  const [openEx, setOpenEx] = useState(null);
+  const [allMovers, setAllMovers] = useState(false);
+
+  const sums = useMemo(() => summary(workouts, range, bodyAt), [workouts, range, bodyAt]);
+  const rows = useMemo(() => movers(workouts, range, bodyAt), [workouts, range, bodyAt]);
+  const weeks = useMemo(() => weeklyVolume(workouts, 8), [workouts]);
+  const week = useMemo(() => muscleWeek(workouts), [workouts]);
 
   const records = useMemo(() => {
     const map = {};
     [...workouts].sort((a, b) => a.date.localeCompare(b.date)).forEach((w) => {
       w.exercises.forEach((ex) => {
-        const v = ex.bodyweight ? topReps(ex) : topWeight(ex);
-        const rm = est1RM(ex);
+        const v = ex.bodyweight && !addedKg(ex) ? topReps(ex) : topWeight(ex);
+        if (v == null) return;
         const cur = map[ex.name];
-        if (!cur || v > cur.v) map[ex.name] = { name: ex.name, v, date: w.date, bw: ex.bodyweight, rm, reps: topReps(ex) };
+        if (!cur || v > cur.v) map[ex.name] = { name: ex.name, v, date: w.date, bw: ex.bodyweight && !addedKg(ex), rm: est1RM(ex) };
       });
     });
     return Object.values(map).sort((a, b) => b.date.localeCompare(a.date));
   }, [workouts]);
 
-  const m = METRICS.find((x) => x.id === metric);
-  const valid = series.filter((r) => r[metric] != null);
-  const first = valid[0], last = valid[valid.length - 1];
-  const delta = first && last ? last[metric] - first[metric] : null;
-
   if (!workouts.length) return <div className="f-body text-sm text-center py-20 px-4" style={{ color: C.dim }}>Графики появятся после первой записанной тренировки.</div>;
 
+  const shown = allMovers ? rows : rows.slice(0, 6);
+  const avgMin = sums.now.avgMin;
+  const avgMinBefore = sums.before.avgMin;
+
   return (
-    <div className="px-4 pt-4 pb-8">
-      <div className="flex rounded-lg overflow-hidden mb-3" style={{ border: `1px solid ${C.line}` }}>
-        {[["exercise", "Упражнение"], ["total", "Тоннаж"], ["volume", "Объём"], ["pr", "Рекорды"]].map(([id, l]) => (
-          <button key={id} onClick={() => setView(id)} className="f-body flex-1 text-xs py-2" style={{ background: view === id ? C.red : C.surface, color: view === id ? C.chalk : C.dim }}>{l}</button>
+    <div className="px-4 pt-4 pb-8 space-y-5">
+      <div className="flex gap-1.5">
+        {RANGES.map((r) => (
+          <button key={r.id} onClick={() => setRange(r.id)} className="f-body rounded-full px-3 py-1 text-xs"
+            style={{ background: range === r.id ? C.surfaceHi : "transparent", color: range === r.id ? C.chalk : C.dim, border: `1px solid ${C.line}` }}>{r.label}</button>
         ))}
+        <span className="f-body text-2xs self-center ml-auto" style={{ color: C.dim }}>к прошлому такому же периоду</span>
       </div>
-      {(view === "exercise" || view === "total") && (
-        <div className="flex gap-1.5 mb-3">
-          {RANGES.map((r) => <button key={r.id} onClick={() => setRange(r.id)} className="f-body rounded-full px-3 py-1 text-xs" style={{ background: range === r.id ? C.surfaceHi : "transparent", color: range === r.id ? C.chalk : C.dim, border: `1px solid ${C.line}` }}>{r.label}</button>)}
+
+      <div className="flex gap-2">
+        <StatTile label="тренировок" value={sums.now.workouts} delta={sums.now.workouts - sums.before.workouts} />
+        <StatTile label="подходов" value={sums.now.sets} delta={sums.now.sets - sums.before.sets} />
+        <StatTile label="мин в среднем" value={avgMin || "—"} delta={avgMin && avgMinBefore ? avgMin - avgMinBefore : null} />
+      </div>
+
+      <div>
+        <div className="f-display text-sm font-semibold mb-1" style={{ color: C.chalk }}>Что растёт, что стоит</div>
+        <div className="f-body text-xs mb-2" style={{ color: C.dim }}>
+          Сверху то, что требует решения. Нажатие раскрывает график упражнения.
         </div>
-      )}
-
-      {view === "exercise" && (<>
-        <select value={sel} onChange={(e) => setSel(e.target.value)} aria-label="Упражнение для графика" className="f-body w-full rounded-lg px-3 py-2.5 text-sm" style={{ background: C.surface, color: C.chalk, border: `1px solid ${C.line}` }}>
-          {names.map((n) => <option key={n} value={n}>{n}</option>)}
-        </select>
-        <div className="flex gap-1.5 mt-2 overflow-x-auto pb-1">
-          {METRICS.map((x) => <button key={x.id} onClick={() => setMetric(x.id)} className="f-body shrink-0 rounded-full px-3 py-1 text-xs" style={{ background: metric === x.id ? C.blue : C.surface, color: metric === x.id ? C.chalk : C.dim, border: `1px solid ${metric === x.id ? C.blue : C.line}` }}>{x.label}</button>)}
+        <div className="space-y-1.5">
+          {!rows.length && <div className="f-body text-sm text-center py-8" style={{ color: C.dim }}>Нет данных за период.</div>}
+          {shown.map((r) => (
+            <MoverRow key={r.name} row={r} open={openEx === r.name} onToggle={() => setOpenEx(openEx === r.name ? null : r.name)} />
+          ))}
         </div>
-        {valid.length ? (<>
-          <div className="flex gap-2 mt-3">
-            <Chip label={m.label} value={`${last[metric]}${m.unit ? " " + m.unit : ""}`} sub={delta ? `${delta > 0 ? "+" : ""}${r1(delta)} за период` : undefined} />
-            <Chip label="сессий" value={valid.length} />
-          </div>
-          <ChartFrame>
-            <LineByDate data={series} dataKey={metric} name={m.label} />
-          </ChartFrame>
-        </>) : <div className="f-body text-sm text-center py-12" style={{ color: C.dim }}>Нет данных за период.</div>}
-      </>)}
+        {rows.length > 6 && (
+          <button onClick={() => setAllMovers((v) => !v)} className="f-body w-full mt-2 py-2.5 text-xs" style={{ color: C.blueText }}>
+            {allMovers ? "Свернуть" : `Показать все — ещё ${rows.length - 6}`}
+          </button>
+        )}
+      </div>
 
-      {view === "total" && (
-        <ChartFrame>
-          <BarByDate data={totalSeries} dataKey="tonnage" name="тоннаж, кг" />
-        </ChartFrame>
-      )}
+      <div>
+        <div className="f-display text-sm font-semibold mb-1" style={{ color: C.chalk }}>Объём по неделям</div>
+        <div className="f-body text-xs mb-2.5" style={{ color: C.dim }}>
+          Рабочие подходы, а не тоннаж: подход сравним между упражнениями, килограмм — нет.
+          Скручивания на сотню повторений иначе перевешивают присед.
+        </div>
+        <VolumeBars weeks={weeks} />
+      </div>
 
-      {view === "volume" && (<div>
-        <div className="f-body text-xs mb-3" style={{ color: C.dim }}>Рабочих подходов за 7 дней. Ориентир для роста — 10–20 на мышцу.</div>
-        {(volume.push > 0 || volume.pull > 0) && (
-          <div className="rounded-xl px-3 py-2.5 mb-3" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+      <div>
+        <div className="f-display text-sm font-semibold mb-1" style={{ color: C.chalk }}>Неделя по мышцам</div>
+        <div className="f-body text-xs mb-2.5" style={{ color: C.dim }}>Ориентир для роста — 10–20 подходов на мышцу в неделю.</div>
+        {(week.push > 0 || week.pull > 0) && (
+          <div className="mb-3">
             <div className="flex justify-between f-body text-xs mb-1.5">
               <span style={{ color: C.chalk }}>Жимы / тяги</span>
-              <span className="f-num" style={{ color: volume.pull >= volume.push ? C.moss : C.mustard }}>{volume.push} / {volume.pull}</span>
+              <span className="f-num" style={{ color: week.pull >= week.push ? C.moss : C.mustard }}>{week.push} / {week.pull}</span>
             </div>
             <div className="flex h-2 rounded-full overflow-hidden" style={{ background: C.line }}>
-              <div style={{ width: `${(volume.push / (volume.push + volume.pull)) * 100}%`, background: C.red }} />
-              <div style={{ width: `${(volume.pull / (volume.push + volume.pull)) * 100}%`, background: C.blue }} />
+              <div style={{ width: `${(week.push / (week.push + week.pull)) * 100}%`, background: C.red }} />
+              <div style={{ width: `${(week.pull / (week.push + week.pull)) * 100}%`, background: C.blue }} />
             </div>
-            <div className="f-body text-2xs mt-1.5" style={{ color: C.dim }}>{volume.pull >= volume.push ? "Тяг не меньше жимов — так плечевой сустав держится ровно." : "Жимов больше, чем тяг. Перекос в жимы стягивает плечи вперёд; тяг стоит делать не меньше."}</div>
+            <div className="f-body text-2xs mt-1.5" style={{ color: C.dim }}>{week.pull >= week.push ? "Тяг не меньше жимов — так плечевой сустав держится ровно." : "Жимов больше, чем тяг. Перекос в жимы стягивает плечи вперёд; тяг стоит делать не меньше."}</div>
           </div>
         )}
-        {!volume.rows.length && <div className="f-body text-sm text-center py-12" style={{ color: C.dim }}>Нет тренировок за последние 2 недели.</div>}
+        {!week.rows.length && <div className="f-body text-sm text-center py-8" style={{ color: C.dim }}>Нет тренировок за последние две недели.</div>}
         <div className="space-y-2.5">
-          {volume.rows.map((r) => (
+          {week.rows.map((r) => (
             <div key={r.m}>
               <div className="flex justify-between f-body text-xs mb-1">
                 <span style={{ color: C.chalk }}>{r.m}</span>
@@ -1728,12 +1909,19 @@ function ProgressTab({ workouts, bodyAt }) {
             </div>
           ))}
         </div>
-      </div>)}
+      </div>
 
-      {view === "pr" && (
+      <div>
+        <div className="f-display text-sm font-semibold mb-1" style={{ color: C.chalk }}>Сравнить тренировки</div>
+        <div className="f-body text-xs mb-2.5" style={{ color: C.dim }}>Один и тот же день в двух разных числах — что изменилось.</div>
+        <CompareCard workouts={workouts} metrics={metrics} bmr={bmr} restOverrides={restOverrides} bodyAt={bodyAt} />
+      </div>
+
+      <div>
+        <div className="f-display text-sm font-semibold mb-2" style={{ color: C.chalk }}>Рекорды</div>
         <div className="space-y-1.5">
-          {!records.length && <div className="f-body text-sm text-center py-12" style={{ color: C.dim }}>Рекордов пока нет.</div>}
-          {records.map((r) => (
+          {!records.length && <div className="f-body text-sm text-center py-8" style={{ color: C.dim }}>Рекордов пока нет.</div>}
+          {records.slice(0, 12).map((r) => (
             <div key={r.name} className="flex items-center justify-between gap-3 rounded-xl px-3 py-2.5" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
               <div className="min-w-0">
                 <div className="f-body text-xs truncate" style={{ color: C.chalk }}>{r.name}</div>
@@ -1746,7 +1934,7 @@ function ProgressTab({ workouts, bodyAt }) {
             </div>
           ))}
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -1863,14 +2051,10 @@ function BodyTab({ metrics, profile, setProfile, onAdd, onDelete, workouts, rest
   }, [w1, r1v]);
 
   const tier = lbm ? 3 : bodyW && profile.height && profile.age ? 2 : bodyW ? 1 : 0;
-  const bmr = useMemo(() => {
-    if (lbm) return Math.round(370 + 21.6 * lbm);
-    if (bodyW && profile.height && profile.age) {
-      const base = 10 * bodyW + 6.25 * +profile.height - 5 * +profile.age;
-      return Math.round(profile.sex === "f" ? base - 161 : base + 5);
-    }
-    return null;
-  }, [lbm, bodyW, profile]);
+  const bmr = useMemo(
+    () => bmrOf({ lbm, bodyKg: bodyW, height: profile.height, age: profile.age, sex: profile.sex }),
+    [lbm, bodyW, profile],
+  );
   const tdee = bmr ? Math.round(bmr * +profile.activity) : null;
 
   /* Расход считается по конкретной записи из журнала. По умолчанию —
@@ -2172,6 +2356,14 @@ export default function App() {
      калорий. Берётся ближайший замер, а не последний: тренировка трёхмесячной
      давности не должна считаться по сегодняшнему весу. */
   const bodyAt = useCallback((date) => weightNear(metrics, date)?.kg || 0, [metrics]);
+  /* Основной обмен нужен и «Телу», и сравнению тренировок на графиках:
+     без него расход считается «грязным», без вычета покоя. */
+  const bmr = useMemo(() => {
+    const last = [...metrics].sort((a, b) => a.date.localeCompare(b.date)).pop();
+    const kg = +last?.weight || 0;
+    const bf = bodyFatNavy(last, profile);
+    return bmrOf({ lbm: lbmOf(kg, bf), bodyKg: kg, height: profile.height, age: profile.age, sex: profile.sex });
+  }, [metrics, profile]);
 
   const buildExport = () => {
     const lines = ["# Тренировочный дневник — выгрузка", ""];
@@ -2317,7 +2509,7 @@ export default function App() {
         <div key={shownTab} className="tab-in">
         {shownTab === "session" && <SessionTab session={session} setSession={setSession} workouts={workouts} days={days} onFinish={finishSession} goToDays={() => { setBaseView("days"); setTab("base"); }} conditions={conditions} restOverrides={restOverrides} setRestOverride={setRestOverride} muted={muted} bodyAt={bodyAt} gear={gear} />}
         {shownTab === "journal" && <JournalTab workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} onUpdate={updateWorkout} onAdd={addWorkout} days={days} conditions={conditions} bodyAt={bodyAt} gear={gear} />}
-        {shownTab === "progress" && <ProgressTab workouts={workouts} bodyAt={bodyAt} />}
+        {shownTab === "progress" && <ProgressTab workouts={workouts} bodyAt={bodyAt} metrics={metrics} bmr={bmr} restOverrides={restOverrides} />}
         {shownTab === "base" && <BaseTab days={days} setDays={setDays} initialView={baseView} conditions={conditions} gear={gear} setGear={setGear} />}
         {shownTab === "body" && <BodyTab metrics={metrics} profile={profile} setProfile={setProfile} onAdd={addMetric} onDelete={deleteMetric} workouts={workouts} restOverrides={restOverrides} />}
         </div>

@@ -328,6 +328,22 @@ await picker.selectOption({ index: 1 });
 await page.waitForTimeout(500);
 ok((await energyCard.innerText()) !== first, "выбор другой тренировки пересчитывает расход");
 
+section("Графики");
+await tab("Графики");
+await page.waitForTimeout(700);
+const prog = await page.locator('[role="tabpanel"]').innerText();
+/* Вкладка отвечает на вопросы сама, а не просит выбрать одно упражнение
+   из ста одного и одну метрику из четырёх. */
+for (const part of ["Что растёт, что стоит", "Объём по неделям", "Неделя по мышцам", "Сравнить тренировки", "Рекорды"])
+  ok(prog.includes(part), `на графиках есть раздел «${part.toLowerCase()}»`);
+ok(!(await page.getByRole("combobox", { name: "Упражнение для графика" }).isVisible().catch(() => false)),
+  "выпадающего списка на 101 упражнение больше нет");
+const mover = page.locator('[role="tabpanel"] button').filter({ hasText: /стоит|растёт|просело|был один раз/ }).first();
+ok(await mover.isVisible(), "упражнения показаны с состоянием, а не по запросу");
+await mover.click();
+await page.waitForTimeout(900);
+ok(await page.locator("svg.recharts-surface").first().isVisible().catch(() => false), "нажатие раскрывает график упражнения");
+
 section("Травмы и замены");
 await tab("Тело");
 await page.getByText("Травмы и ограничения").click();

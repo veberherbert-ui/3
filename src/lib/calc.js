@@ -121,6 +121,20 @@ export function weightNear(metrics, date) {
   return { kg: +best.weight, date: best.date };
 }
 
+/**
+ * Основной обмен, ккал в сутки. По сухой массе (Кетч-Макардл), если она
+ * известна, иначе по Миффлину — Сан Жеору. Нужен и во вкладке «Тело»,
+ * и на графиках, поэтому живёт здесь, а не в компоненте.
+ */
+export function bmrOf({ lbm, bodyKg, height, age, sex }) {
+  if (lbm) return Math.round(370 + 21.6 * lbm);
+  if (bodyKg && height && age) {
+    const base = 10 * bodyKg + 6.25 * +height - 5 * +age;
+    return Math.round(sex === "f" ? base - 161 : base + 5);
+  }
+  return null;
+}
+
 export const bmiOf = (w, h) => (w && h ? r1(w / Math.pow(h / 100, 2)) : null);
 
 /** Сухая масса тела: всё, кроме жира. */
