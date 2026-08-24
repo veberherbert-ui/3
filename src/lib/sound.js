@@ -1,28 +1,56 @@
 /* Сигнал окончания отдыха.
 
-   На iPhone тут две ловушки, и обе обходятся.
+   На iPhone здесь развилка, и обойти её нельзя — можно только выбрать
+   сторону. Система разрешает странице либо мешать чужому звуку, либо нет:
 
-   1. Аппаратный переключатель «без звука» глушит Web Audio наглухо.
-      Обход: держать проигрываемый втихую аудиоэлемент. Пока он играет,
-      система считает страницу медиапроигрывателем и пускает звук мимо
-      переключателя — тем же путём, которым играет музыка.
+   • «не мешать музыке» — звук примешивается к плееру, музыка играет дальше,
+     но аппаратный переключатель «без звука» глушит сигнал, а свёрнутое
+     приложение система усыпляет вместе с его часами;
+   • «сигнал важнее» — страница объявляет себя проигрывателем: сигнал звучит
+     мимо переключателя и из фона, но чужая музыка при этом встаёт на паузу.
 
-   2. Когда приложение уходит в фон, таймеры JavaScript замирают, и сигнал
-      «по тику» просто не наступает. Обход: планировать звук заранее,
-      средствами самого Web Audio. Он отсчитывает время собственными
-      часами и срабатывает независимо от того, крутится ли JavaScript.
+   Выбор за человеком, по умолчанию музыка важнее. Раньше приложение молча
+   брало вторую сторону — и глушило музыку при каждом нажатии «начать».
 
-   Звук синтезируется на месте — ничего не нужно докачивать, офлайн работает. */
+   Сигнал синтезируется на месте: ничего не докачивается, офлайн работает. */
 
 let ctx = null;
 let unlocked = false;
 let keeper = null;
 let scheduled = [];
+let mode = "mix"; /* mix — не мешать музыке, solo — сигнал важнее */
+let sessionType = null; /* что система на самом деле приняла */
+
+/* Порядок предпочтений для каждого режима. Неподходящее значение система
+   просто игнорирует, поэтому после присвоения перечитываем результат. */
+const WANTED = {
+  /* transient примешивает сигнал и на время приглушает чужой звук,
+     ambient — просто примешивает; и то и другое музыку не останавливает */
+  mix: ["transient", "ambient"],
+  playback: ["playback"],
+};
+
+function applySession(kind) {
+  const s = navigator.audioSession;
+  if (!s) return null;
+  for (const t of WANTED[kind] || []) {
+    try {
+      s.type = t;
+      if (s.type === t) return t;
+    } catch {
+      /* значение не поддержано — пробуем следующее */
+    }
+  }
+  return s.type || null;
+}
 
 function context() {
   if (ctx) return ctx;
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) return null;
+  /* Тип сессии выставляем до создания контекста: система запоминает его
+     в момент, когда страница впервые просит звук. */
+  sessionType = applySession(mode === "solo" ? "playback" : "mix");
   try {
     ctx = new AC();
   } catch {
@@ -58,8 +86,11 @@ function silentWavUrl(seconds = 0.5) {
   return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
 }
 
+/* Держатель нужен только в режиме «сигнал важнее»: пока он играет, система
+   считает страницу проигрывателем — и пускает звук мимо переключателя и из
+   фона. Он же и глушит чужую музыку, поэтому в обычном режиме его нет. */
 function startKeeper() {
-  if (keeper) return;
+  if (mode !== "solo" || keeper) return;
   try {
     keeper = new Audio(silentWavUrl());
     keeper.loop = true;
@@ -70,6 +101,30 @@ function startKeeper() {
   } catch {
     keeper = null;
   }
+}
+
+function stopKeeper() {
+  if (!keeper) return;
+  try {
+    keeper.pause();
+    if (keeper.src.startsWith("blob:")) URL.revokeObjectURL(keeper.src);
+  } catch {
+    /* ничего */
+  }
+  keeper = null;
+}
+
+/**
+ * Выбрать сторону развилки: "mix" — не мешать музыке (по умолчанию),
+ * "solo" — сигнал важнее музыки.
+ */
+export function setAudioMode(next) {
+  const want = next === "solo" ? "solo" : "mix";
+  if (want === mode) return;
+  mode = want;
+  if (mode === "mix") stopKeeper();
+  sessionType = applySession(mode === "solo" ? "playback" : "mix");
+  if (mode === "solo" && ctx) startKeeper();
 }
 
 /** Вызывать из обработчика касания — иначе iOS не разрешит звук. */
@@ -96,10 +151,15 @@ export function primeAudio() {
 /** Доступен ли звук: контекст создан и не заблокирован системой. */
 export const audioReady = () => !!ctx && ctx.state === "running";
 
+/** Что приложение делает со звуком на самом деле — для честной подписи. */
+export const audioMode = () => ({ mode, sessionType, managed: !!navigator.audioSession });
+
 function tone(c, freq, startAt, dur, volume) {
   const o = c.createOscillator();
   const g = c.createGain();
-  o.type = "sine";
+  /* треугольник вместо синуса: у него есть обертоны, и сигнал слышно
+     поверх музыки, а не только в тишине */
+  o.type = "triangle";
   o.frequency.value = freq;
   /* плавные фронты — иначе на телефоне слышен щелчок */
   g.gain.setValueAtTime(0, startAt);
@@ -114,6 +174,8 @@ function tone(c, freq, startAt, dur, volume) {
 }
 
 const CHORD = [880, 1108, 1318];
+/* Громче прежнего: сигнал теперь звучит не вместо музыки, а вместе с ней. */
+const VOL = 0.45;
 
 /** Отменить всё, что было запланировано ранее. */
 export function cancelScheduled() {
@@ -132,7 +194,7 @@ export function cancelScheduled() {
  * Запланировать сигнал окончания отдыха через delaySec секунд.
  * Заодно ставит короткий тик за три секунды до конца.
  */
-export function scheduleRestOver(delaySec, volume = 0.25) {
+export function scheduleRestOver(delaySec, volume = VOL) {
   cancelScheduled();
   const c = context();
   if (!c) return;
@@ -145,8 +207,8 @@ export function scheduleRestOver(delaySec, volume = 0.25) {
   CHORD.forEach((f, i) => scheduled.push(tone(c, f, at + i * 0.16, 0.13, volume)));
 }
 
-/** Сыграть сигнал прямо сейчас — для проверки звука в настройках. */
-export function playRestOver(volume = 0.25) {
+/** Сыграть сигнал прямо сейчас — для проверки звука и для догоняющего сигнала. */
+export function playRestOver(volume = VOL) {
   const c = context();
   if (!c) return;
   if (c.state === "suspended") c.resume().catch(() => {});
@@ -178,13 +240,5 @@ export function tapBuzz() {
 /** Отпустить медиасессию: тренировка закончилась, держать её незачем. */
 export function releaseAudio() {
   cancelScheduled();
-  if (keeper) {
-    try {
-      keeper.pause();
-      if (keeper.src.startsWith("blob:")) URL.revokeObjectURL(keeper.src);
-    } catch {
-      /* ничего */
-    }
-    keeper = null;
-  }
+  stopKeeper();
 }

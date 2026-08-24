@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue, lazy, Suspense } from "react";
-import { Plus, X, TrendingUp, BookOpen, Dumbbell, Flame, Settings, Trash2, Check, Info, Play, Timer, Calculator, Copy, ExternalLink, Activity, Pause, ChevronDown, ChevronUp, MoreHorizontal, Search, Library, Layers, Pencil, RotateCcw, Download, Upload, Share2, HardDrive, ShieldAlert, TriangleAlert, HeartPulse, Repeat2, Volume2, VolumeX, RefreshCw, FileText, Type, CalendarPlus, Tag, GripVertical } from "lucide-react";
+import { Plus, X, TrendingUp, BookOpen, Dumbbell, Flame, Settings, Trash2, Check, Info, Play, Timer, Calculator, Copy, ExternalLink, Activity, Pause, ChevronDown, ChevronUp, MoreHorizontal, Search, Library, Layers, Pencil, RotateCcw, Download, Upload, Share2, HardDrive, ShieldAlert, TriangleAlert, HeartPulse, Repeat2, Volume2, VolumeX, RefreshCw, FileText, Type, CalendarPlus, Tag, GripVertical, Bell } from "lucide-react";
 
 import { EXDB, GROUPS, PRESETS, DEFAULT_DAYS, isUni, isBW, isPair, GEAR, GEAR_PRESETS, fitsGear, moveOf, variantsOf } from "./data/exercises.js";
 import { CONDITIONS, CONDITION_BY_ID, helpfulNote } from "./data/conditions.js";
@@ -21,7 +21,8 @@ import { shareOrDownload, readFileAsText, backupName } from "./lib/backup.js";
 import { restFor, fmtRest, stepRest } from "./lib/rest.js";
 import { workoutEnergy } from "./lib/energy.js";
 import { summary, movers, weeklyVolume, muscleWeek, compare } from "./lib/progress.js";
-import { primeAudio, playRestOver, scheduleRestOver, cancelScheduled, vibrate, tapBuzz, releaseAudio, audioReady } from "./lib/sound.js";
+import { primeAudio, playRestOver, scheduleRestOver, cancelScheduled, vibrate, tapBuzz, releaseAudio, audioReady, setAudioMode } from "./lib/sound.js";
+import { notifyState, askNotify, scheduleRestNotice, cancelRestNotice } from "./lib/notify.js";
 import { useWakeLock } from "./lib/wakelock.js";
 import { buildLabel, checkForUpdate, reloadOnUpdate } from "./lib/update.js";
 import { useAppearance, TEXT_SIZES } from "./lib/appearance.js";
@@ -615,6 +616,16 @@ function RestBar({ rest, onDone, onAdjust, onSkip, muted }) {
     return cancelScheduled;
   }, [until, muted]);
 
+  /* Уведомление — на случай, когда приложение свёрнуто, а телефон в руке.
+     Оно не заменяет сигнал, а дублирует его: где-то сработает одно,
+     где-то другое. */
+  useEffect(() => {
+    const delay = (until - Date.now()) / 1000;
+    if (delay <= 0) return;
+    scheduleRestNotice(delay, exName);
+    return cancelRestNotice;
+  }, [until, exName]);
+
   /* вибрация планированию не поддаётся — её даём по факту */
   const buzzed = useRef(false);
   useEffect(() => {
@@ -623,6 +634,24 @@ function RestBar({ rest, onDone, onAdjust, onSkip, muted }) {
       if (!muted) vibrate();
     }
   }, [done, muted]);
+
+  /* Догоняющий сигнал. Свёрнутое приложение iOS усыпляет вместе с часами
+     Web Audio — запланированный аккорд тогда не звучит вовсе. Возвращаемся,
+     а отдых давно кончился и об этом никто не сказал. Теперь говорит:
+     при возврате сигнал и толчок дают сразу. */
+  const caught = useRef(false);
+  useEffect(() => {
+    caught.current = false; /* каждый отдых догоняем заново */
+    const onBack = () => {
+      if (document.visibilityState !== "visible") return;
+      if (caught.current || Date.now() < until) return;
+      caught.current = true;
+      cancelRestNotice();
+      if (!muted) playRestOver(); else vibrate();
+    };
+    document.addEventListener("visibilitychange", onBack);
+    return () => document.removeEventListener("visibilitychange", onBack);
+  }, [until, muted]);
 
   const pct = total > 0 ? Math.max(0, Math.min(100, (leftMs / (total * 1000)) * 100)) : 0;
   const accent = done ? C.moss : left <= 10 ? C.mustard : C.red;
@@ -2588,7 +2617,7 @@ export default function App() {
   useAppearance(profile);
 
   /* тренировка кончилась — отпускаем медиасессию, она держала звук наготове */
-  useEffect(() => { if (!session) releaseAudio(); }, [session]);
+  useEffect(() => { if (!session) { releaseAudio(); cancelRestNotice(); } }, [session]);
 
   /** Правки времени отдыха, сделанные прямо на тренировке */
   /* Инвентарь: что есть под рукой. Пустой набор — «всё», так приложение
@@ -2601,6 +2630,12 @@ export default function App() {
     setProfile((p) => ({ ...p, restOverrides: { ...(p.restOverrides || {}), [name]: sec } }));
   }, [setProfile]);
   const muted = !!profile.muted;
+
+  /* Сигнал или музыка — решает человек, приложение только выполняет.
+     По умолчанию музыка: её слышно всю тренировку, а сигнал — раз в минуту. */
+  const soundSolo = !!profile.soundSolo;
+  useEffect(() => { setAudioMode(soundSolo ? "solo" : "mix"); }, [soundSolo]);
+  const [notifyOk, setNotifyOk] = useState(() => notifyState());
 
   const backupJSON = () => JSON.stringify({ v: 1, workouts, metrics, days, profile }, null, 0);
 
@@ -2824,13 +2859,60 @@ export default function App() {
               Сигнал: {muted ? "выкл" : "вкл"}
             </button>
             <button
-              onClick={() => { primeAudio(); playRestOver(); setTimeout(() => say(audioReady() ? "Не слышно? Проверь переключатель звука сбоку телефона" : "Система не пустила звук — попробуй ещё раз"), 700); }}
+              onClick={() => { primeAudio(); playRestOver(); setTimeout(() => say(audioReady() ? (soundSolo ? "Не слышно? Проверь громкость" : "Не слышно? Проверь переключатель звука сбоку телефона") : "Система не пустила звук — попробуй ещё раз"), 700); }}
               disabled={muted}
               className="f-body flex-1 rounded-xl py-3 text-sm flex items-center justify-center gap-2"
               style={{ background: C.surfaceHi, color: muted ? C.dim : C.chalk, border: `1px solid ${C.line}` }}>
               <Volume2 size={15} /> Проверить
             </button>
           </div>
+
+          {/* Развилка, которую нельзя обойти: телефон разрешает странице либо
+              мешать чужому звуку, либо звучать только когда его слышно.
+              Выбор отдан человеку, потому что правильного ответа нет. */}
+          {!muted && (
+            <div className="rounded-xl mb-2 overflow-hidden" style={{ background: C.surfaceHi, border: `1px solid ${C.line}` }}>
+              {[
+                { v: false, t: "Не мешать музыке", d: "Сигнал звучит поверх плеера. Молчит, если сбоку включён «без звука», и не срабатывает из свёрнутого приложения." },
+                { v: true, t: "Сигнал важнее музыки", d: "Слышно всегда и даже из фона, но плеер в наушниках встаёт на паузу на время тренировки." },
+              ].map(({ v, t, d }) => (
+                <button key={String(v)} onClick={() => { setProfile((p) => ({ ...p, soundSolo: v })); primeAudio(); }}
+                  className="f-body w-full text-left px-3 py-2.5 flex gap-2.5"
+                  style={{ borderTop: v ? `1px solid ${C.line}` : "none" }}>
+                  <span className="shrink-0 w-4 h-4 mt-0.5 rounded-full flex items-center justify-center"
+                    style={{ border: `1px solid ${soundSolo === v ? C.moss : C.line}`, background: soundSolo === v ? C.moss : "transparent" }}>
+                    {soundSolo === v && <span className="w-1.5 h-1.5 rounded-full" style={{ background: C.chalk }} />}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-sm" style={{ color: C.chalk }}>{t}</span>
+                    <span className="block text-2xs mt-0.5" style={{ color: C.dim }}>{d}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Уведомления. Обещать «придёт, даже если телефон в кармане»
+              нельзя: без сервера этого не умеет ни один сайт. Пишем как есть. */}
+          <button
+            onClick={async () => { const st = await askNotify(); setNotifyOk(st); say(st === "да" ? "Уведомления включены" : st === "запрещено" ? "Уведомления запрещены в настройках телефона" : "Система не дала разрешение"); }}
+            /* Спросить можно один раз: отказ снимается только в настройках
+               телефона, и кнопка после него — обманка. */
+            disabled={notifyOk !== "спросить"}
+            className="f-body w-full rounded-xl px-3 py-3 text-sm mb-2 text-left flex gap-2.5 items-start"
+            style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${notifyOk === "да" ? C.moss : C.line}` }}>
+            <Bell size={15} color={notifyOk === "да" ? C.mossText : C.dim} className="mt-0.5 shrink-0" />
+            <span className="min-w-0">
+              <span className="block">
+                {notifyOk === "да" ? "Уведомление об отдыхе: вкл" : notifyOk === "запрещено" ? "Уведомления запрещены" : notifyOk === "нет" ? "Уведомления недоступны" : "Включить уведомление об отдыхе"}
+              </span>
+              <span className="block f-body text-2xs mt-0.5" style={{ color: C.dim }}>
+                {notifyOk === "запрещено"
+                  ? "Разрешить можно только в настройках телефона — приложение спросить больше не может."
+                  : "Приходит, когда приложение свёрнуто, а телефон в руке. На iPhone свёрнутое приложение засыпает, и уведомление придёт при возвращении — там надёжнее сигнал в наушники."}
+              </span>
+            </span>
+          </button>
           <button onClick={saveBackupFile} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Share2 size={15} /> Сохранить копию файлом</button>
           <button onClick={async () => { try { await navigator.clipboard.writeText(backupJSON()); say("Копия в буфере обмена"); } catch { setShowSettings(false); setExportText(backupJSON()); } }} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Copy size={15} /> Скопировать копию текстом</button>
           <button onClick={openImport} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Upload size={15} /> Восстановить из копии</button>

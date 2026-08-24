@@ -60,6 +60,18 @@ const tab = async (name) => {
   await page.waitForTimeout(500);
 };
 
+/* Считаем запуски медиаэлементов. На iPhone именно проигрываемый <audio>
+   переводит страницу в режим проигрывателя — и ставит на паузу музыку в
+   наушниках. Приложение однажды делало это на каждое нажатие «начать». */
+await page.addInitScript(() => {
+  window.__mediaPlays = 0;
+  const play = HTMLMediaElement.prototype.play;
+  HTMLMediaElement.prototype.play = function (...a) {
+    window.__mediaPlays++;
+    return play.apply(this, a);
+  };
+});
+
 await page.goto(URL, { waitUntil: "networkidle" });
 await page.waitForTimeout(1200);
 
@@ -111,6 +123,8 @@ await page.getByPlaceholder("кг").first().fill("40");
 await page.getByRole("button", { name: /подход 1: начать/i }).first().click();
 await page.waitForTimeout(600);
 ok(await page.getByRole("button", { name: /подход 1: идёт/i }).first().isVisible(), "подход засекается секундомером");
+ok(await page.evaluate(() => window.__mediaPlays) === 0, "старт подхода не перехватывает звук — музыка в наушниках играет дальше",
+  `запусков медиаэлемента: ${await page.evaluate(() => window.__mediaPlays)}`);
 await page.waitForTimeout(5600);
 await page.getByRole("button", { name: /подход 1: идёт/i }).first().click();
 await page.waitForTimeout(900);
@@ -438,6 +452,30 @@ await page.waitForTimeout(600);
 ok((await catalogCount()) === allCount, "«полный зал» возвращает всё");
 await page.getByRole("button", { name: /Мой инвентарь/ }).click();
 await page.waitForTimeout(300);
+
+section("Звук и уведомления");
+await page.locator('button[aria-label="Настройки"]').click();
+await page.waitForTimeout(500);
+const soundSheet = await page.locator("body").innerText();
+ok(/Не мешать музыке/.test(soundSheet), "выбор стороны развилки со звуком есть в настройках");
+ok(/встаёт на паузу/.test(soundSheet), "цена второго варианта названа прямо");
+ok(/уведомлени/i.test(soundSheet), "уведомление об отдыхе можно включить");
+/* Что бы система ни ответила про разрешение, блок обязан назвать
+   настоящее ограничение, а не обещать «придёт всегда». */
+ok(/при возвращении|настройках телефона/.test(soundSheet), "про ограничение сказано честно, без обещаний");
+const notifyBtn = page.getByRole("button", { name: /[Уу]ведомлени/ }).first();
+const notifyDead = /запрещены|недоступны|: вкл/.test(await notifyBtn.innerText());
+ok(notifyDead === (await notifyBtn.isDisabled()), "кнопка, которая уже ничего не даст, не предлагается нажать");
+/* «Сигнал важнее музыки» — там держатель медиасессии как раз нужен. */
+await page.getByRole("button", { name: /Сигнал важнее музыки/ }).click();
+await page.waitForTimeout(300);
+const soloSaved = (await dbRead("profile"))?.soundSolo;
+ok(soloSaved === true, "выбор запоминается");
+await page.getByRole("button", { name: /Не мешать музыке/ }).click();
+await page.waitForTimeout(300);
+ok((await dbRead("profile"))?.soundSolo === false, "и переключается обратно");
+await page.getByRole("button", { name: "Закрыть", exact: true }).last().click();
+await page.waitForTimeout(400);
 
 section("Резервная копия");
 await page.locator('button[aria-label="Настройки"]').click();
