@@ -462,6 +462,9 @@ function lastExerciseOf(workouts, name) {
 /* Вес подхода при сохранении. Своим весом поле означает утяжеление
    и остаётся пустым, если его не было, — тогда пишем null, а не ноль:
    ноль в записи выглядит как «поднял ноль килограммов». */
+/* Пустое поле — это и «», и null: число могли стереть, а могли не вписать. */
+const blank = (v) => v === "" || v == null;
+
 function setWeight(ex, set) {
   if (!ex.bodyweight) return +set.weight;
   return set.weight === "" || set.weight == null ? null : +set.weight;
@@ -664,6 +667,9 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
      открыт лист с метками и техникой. */
   const [opened, setOpened] = useState({});
   const [sheet, setSheet] = useState(null);
+  /* Поля повторений — чтобы поставить курсор туда, где не хватает цифры. */
+  const fieldRefs = useRef({});
+  const [blanksWarn, setBlanksWarn] = useState(false);
 
   const day = days.find((d) => d.id === pickDay) || days[0];
   useEffect(() => { if (day) setPicked(day.exercises); }, [pickDay, days.length]); // eslint-disable-line
@@ -775,11 +781,13 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
   });
   /* Начали подход: секундомер живёт в самой сессии, поэтому переживает
      сворачивание приложения. Отдых на это время убираем — он кончился. */
+  /* Идущий подход помним по имени упражнения, а не по номеру в списке:
+     список можно переставить прямо во время отсчёта, и номер уедет. */
   const startSet = (i, j) => {
     tapBuzz();
     primeAudio(); /* касание пользователя — момент, когда iOS разрешает звук */
     cancelScheduled();
-    setSession((s) => ({ ...s, rest: null, run: { i, j, at: Date.now() } }));
+    setSession((s) => ({ ...s, rest: null, run: { name: s.exercises[i].name, j, at: Date.now() } }));
   };
 
   /** Отметить подход сделанным и запустить отдых. sec — замер, если он был. */
@@ -787,6 +795,11 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
     const ex = session.exercises[i];
     tapBuzz();
     primeAudio();
+    /* Подход отмечен, а повторения не вписаны — курсор сам встаёт в поле.
+       Раньше такой подход молча пропадал при сохранении. */
+    if (ex.sets[j]?.reps === "" || ex.sets[j]?.reps == null) {
+      setTimeout(() => fieldRefs.current[`${ex.name}:${j}:reps`]?.focus(), 60);
+    }
     const total = restFor(ex.name, restOverrides);
     setSession((prev) => {
       const list = [...prev.exercises];
@@ -835,11 +848,22 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
   const live = workoutTonnage({ exercises: session.exercises.map((e) => ({ ...e, sets: e.sets.filter((s) => s.done) })) }, bodyAt?.(session.date));
   const doneSets = session.exercises.reduce((n, e) => n + e.sets.filter((s) => s.done).length, 0);
 
-  const finish = () => {
+  /* Подходы, отмеченные сделанными, но без цифр. Сохранить их не во что —
+     а молча выбросить нельзя: человек их делал и видел, что отметил. */
+  const blanks = session.exercises.flatMap((e) =>
+    e.sets.flatMap((s, j) => {
+      if (!s.done) return [];
+      const field = blank(s.reps) ? "reps" : !e.bodyweight && blank(s.weight) ? "weight" : null;
+      return field ? [{ name: e.name, j, field }] : [];
+    }),
+  );
+
+  const finish = (force = false) => {
+    if (!force && blanks.length) { setMenu(false); setBlanksWarn(true); return; }
     const cleaned = session.exercises.map((e) => ({
       name: e.name, bodyweight: e.bodyweight, uni: !!e.uni, pair: !!e.pair,
       tags: e.tags?.length ? e.tags : undefined,
-      sets: e.sets.filter((s) => s.reps !== "" && (e.bodyweight || s.weight !== ""))
+      sets: e.sets.filter((s) => !blank(s.reps) && (e.bodyweight || !blank(s.weight)))
         .map((s) => ({ reps: +s.reps, weight: setWeight(e, s), sec: +s.sec > 0 ? +s.sec : undefined })),
     })).filter((e) => e.sets.length);
     setMenu(false);
@@ -874,7 +898,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
           </button>
         </div>
         <div className="flex gap-2 mt-2.5">
-          <button onClick={finish} className="f-display flex-1 rounded-lg py-2.5 text-sm font-semibold flex items-center justify-center gap-1.5" style={{ background: C.red, color: C.chalk }}><Check size={15} /> Завершить и сохранить</button>
+          <button onClick={() => finish()} className="f-display flex-1 rounded-lg py-2.5 text-sm font-semibold flex items-center justify-center gap-1.5" style={{ background: C.red, color: C.chalk }}><Check size={15} /> Завершить и сохранить</button>
           <button onClick={() => setMenu(true)} aria-label="Ещё действия" className="w-11 rounded-lg flex items-center justify-center" style={{ background: C.surface, border: `1px solid ${C.line}` }}><MoreHorizontal size={20} color={C.dim} /></button>
         </div>
         {session.paused && <div className="f-body text-xs mt-2" style={{ color: C.mustard }}>Пауза — время не идёт. Можно закрыть приложение и вернуться.</div>}
@@ -939,18 +963,26 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
                 {ex.sets.map((s, j) => (
                   <div key={j} className="flex items-center gap-2">
                     <span className="f-num text-xs w-3" style={{ color: C.dim }}>{j + 1}</span>
-                    <input type="number" inputMode="numeric" placeholder="повт" aria-label={`${ex.name}, подход ${j + 1}: повторения`} value={s.reps} onChange={(e) => upd(i, j, "reps", e.target.value)} className="f-num flex-1 rounded-lg px-2 py-1.5 text-sm text-center min-w-0" style={{ background: C.surfaceHi, color: s.done ? C.moss : C.chalk, border: `1px solid ${C.line}` }} />
+                    {/* Отмеченный, но пустой подход подсвечиваем сразу: он
+                        не сохранится, и узнать об этом надо не в журнале. */}
+                    <input type="number" inputMode="numeric" placeholder="повт"
+                      ref={(el) => { fieldRefs.current[`${ex.name}:${j}:reps`] = el; }}
+                      aria-label={`${ex.name}, подход ${j + 1}: повторения`} value={s.reps}
+                      onChange={(e) => upd(i, j, "reps", e.target.value)}
+                      className="f-num flex-1 rounded-lg px-2 py-1.5 text-sm text-center min-w-0"
+                      style={{ background: C.surfaceHi, color: s.done ? C.moss : C.chalk, border: `1px solid ${s.done && s.reps === "" ? C.mustard : C.line}` }} />
                     {/* Своим весом поле не прячем: подтягивания делают и с блином
                         на поясе, икры — с гантелью. Пустое поле значит «без утяжеления». */}
                     <span className="f-body text-xs" aria-hidden="true" style={{ color: C.dim }}>{ex.bodyweight ? "+" : "×"}</span>
                     <input type="number" inputMode="decimal" placeholder={ex.bodyweight ? "+кг" : "кг"}
                       aria-label={`${ex.name}, подход ${j + 1}: ${ex.bodyweight ? "утяжеление в килограммах" : "вес в килограммах"}`}
+                      ref={(el) => { fieldRefs.current[`${ex.name}:${j}:weight`] = el; }}
                       value={s.weight ?? ""} onChange={(e) => upd(i, j, "weight", e.target.value)}
                       className="f-num flex-1 rounded-lg px-2 py-1.5 text-sm text-center min-w-0"
-                      style={{ background: C.surfaceHi, color: s.done ? C.moss : C.chalk, border: `1px solid ${C.line}` }} />
+                      style={{ background: C.surfaceHi, color: s.done ? C.moss : C.chalk, border: `1px solid ${s.done && !ex.bodyweight && (s.weight === "" || s.weight == null) ? C.mustard : C.line}` }} />
                     <SetButton
                       set={s} index={j} exName={ex.name}
-                      running={run?.i === i && run?.j === j}
+                      running={run?.name === ex.name && run?.j === j}
                       startedAt={run?.at}
                       onStart={() => startSet(i, j)}
                       onStop={() => {
@@ -974,7 +1006,35 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
 
       <textarea value={session.note} onChange={(e) => setSession((s) => ({ ...s, note: e.target.value }))} placeholder="Заметка: самочувствие, плечо, сон, что тянуло…" aria-label="Заметка к тренировке" rows={2}
         className="f-body w-full mt-3 rounded-xl px-3 py-2.5 text-sm resize-none" style={{ background: C.surface, color: C.chalk, border: `1px solid ${C.line}` }} />
-      <button onClick={finish} className="f-display w-full mt-3 rounded-xl py-3.5 text-base font-semibold flex items-center justify-center gap-2" style={{ background: C.red, color: C.chalk }}><Check size={18} /> Завершить и сохранить</button>
+      <button onClick={() => finish()} className="f-display w-full mt-3 rounded-xl py-3.5 text-base font-semibold flex items-center justify-center gap-2" style={{ background: C.red, color: C.chalk }}><Check size={18} /> Завершить и сохранить</button>
+
+      {/* Незаполненные отметки. Тихо выбрасывать их нельзя: человек делал
+          подход, видел отметку и таймер отдыха — а в журнале его нет. */}
+      {blanksWarn && (
+        <Sheet onClose={() => setBlanksWarn(false)}>
+          <div className="f-display text-base font-semibold mb-2" style={{ color: C.chalk }}>
+            {blanks.length === 1 ? "Один подход без цифр" : `Подходов без цифр: ${blanks.length}`}
+          </div>
+          <div className="f-body text-sm mb-3" style={{ color: C.chalk }}>
+            Они отмечены сделанными, но повторения или вес не вписаны. Сохранить нечего —
+            в журнал такие подходы не попадут.
+          </div>
+          <div className="mb-3">
+            {blanks.map(({ name, j, field }) => (
+              <div key={`${name}:${j}`} className="f-body text-xs py-1" style={{ color: C.dim, borderTop: `1px solid ${C.line}` }}>
+                {name} · подход {j + 1} · нет {field === "reps" ? "повторений" : "веса"}
+              </div>
+            ))}
+          </div>
+          <button onClick={() => { setBlanksWarn(false); const b = blanks[0]; setTimeout(() => fieldRefs.current[`${b.name}:${b.j}:${b.field}`]?.focus(), 250); }}
+            className="f-display w-full rounded-xl py-3 text-sm font-semibold" style={{ background: C.red, color: C.chalk }}>
+            Вернуться и дописать
+          </button>
+          <button onClick={() => { setBlanksWarn(false); finish(true); }} className="f-body w-full mt-2 py-3 text-sm" style={{ color: C.dim }}>
+            Сохранить без них
+          </button>
+        </Sheet>
+      )}
 
       {/* Всё, что не «ввести подход», живёт здесь: метки, техника, удаление.
           В карточке остаётся только то, ради чего в неё смотрят. */}
@@ -1029,7 +1089,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
       {menu && (
         <Sheet onClose={() => setMenu(false)}>
           <div className="f-display text-base font-semibold mb-3" style={{ color: C.chalk }}>Тренировка</div>
-          <button onClick={finish} className="f-body w-full rounded-xl py-3 text-sm font-medium mb-2 flex items-center justify-center gap-2" style={{ background: C.red, color: C.chalk }}><Check size={15} /> Завершить и сохранить</button>
+          <button onClick={() => finish()} className="f-body w-full rounded-xl py-3 text-sm font-medium mb-2 flex items-center justify-center gap-2" style={{ background: C.red, color: C.chalk }}><Check size={15} /> Завершить и сохранить</button>
           <button onClick={() => { togglePause(); setMenu(false); }} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
             {session.paused ? <><Play size={15} /> Продолжить</> : <><Pause size={15} /> Пауза</>}
           </button>

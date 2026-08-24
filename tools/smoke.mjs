@@ -154,6 +154,26 @@ await packedRow.click();
 await page.waitForTimeout(400);
 ok(await firstSet.isVisible(), "по нажатию раскрывается обратно");
 
+/* Подходы 2 и 3 отмечены секундомером, но повторения не вписаны. Раньше
+   такие подходы молча выбрасывались при сохранении — человек делал подход,
+   видел отметку и отдых, а в журнале его не было. Теперь приложение
+   останавливается и показывает, чего не хватает. */
+await page.getByRole("button", { name: /Завершить и сохранить/ }).first().click();
+await page.waitForTimeout(600);
+ok(await page.getByText("Подходов без цифр: 2").isVisible(), "отмеченный подход без цифр не даёт тихо сохранить");
+const blanksText = await page.locator("div.rounded-t-2xl, div[role='dialog']").last().innerText().catch(() => "");
+ok(/нет повторений/.test(blanksText), "лист называет, чего именно не хватает");
+ok(/Сохранить без них/.test(blanksText), "есть выход для тех, кто правда не помнит цифр");
+await page.getByRole("button", { name: /Вернуться и дописать/ }).click();
+await page.waitForTimeout(600);
+const focused = await page.evaluate(() => document.activeElement?.getAttribute("aria-label") || "");
+ok(/подход 2: повторения/.test(focused), "курсор сам встаёт в первое пустое поле", focused);
+for (const j of [2, 3]) {
+  await page.getByRole("spinbutton", { name: new RegExp(`Жим гантелей лёжа \\(горизонт\\), подход ${j}: повторения`) }).fill("10");
+  await page.getByRole("spinbutton", { name: new RegExp(`Жим гантелей лёжа \\(горизонт\\), подход ${j}: вес`) }).fill("40");
+}
+await page.waitForTimeout(300);
+
 await page.getByRole("button", { name: /Завершить и сохранить/ }).first().click();
 await page.waitForTimeout(1200);
 
@@ -167,6 +187,8 @@ const localDate = await page.evaluate(() => {
 });
 ok(saved?.[0]?.date === localDate, "дата локальная, а не UTC", `${saved?.[0]?.date} = ${localDate}`);
 ok(saved?.[0]?.exercises?.[0]?.sets?.[0]?.weight === 40, "подход сохранён верно");
+ok(saved?.[0]?.exercises?.[0]?.sets?.length === 3, "дописанные подходы не потерялись",
+  `сохранено ${saved?.[0]?.exercises?.[0]?.sets?.length} из 3`);
 /* Замер короче пяти секунд не считается замером — иначе двойное нажатие
    «сделано» породило бы время под нагрузкой в две секунды. */
 const sec = saved?.[0]?.exercises?.[0]?.sets?.[0]?.sec;
@@ -176,7 +198,7 @@ ok(JSON.stringify(saved?.[0]?.exercises?.[0]?.tags) === '["fail","pain"]', "ме
 ok(saved?.[0]?.exercises?.[0]?.pair === true, "жим гантелей помечен парным");
 const pairCard = page.locator("div.rounded-xl").filter({ hasText: "Грудь + Бицепс" }).first();
 const pairTons = +((await pairCard.innerText()).match(/([\d\s\u00a0\u202f]+)\s*кг/)?.[1] || "0").replace(/[^\d]/g, "");
-ok(pairTons === 10 * 40 * 2, "тоннаж пары гантелей считается за две", `${pairTons} кг`);
+ok(pairTons === 3 * 10 * 40 * 2, "тоннаж пары гантелей считается за две", `${pairTons} кг`);
 
 section("Правка записи");
 await page.locator("text=Грудь + Бицепс").first().click();
