@@ -10,11 +10,13 @@
 const problems = [];
 const fail = (where, what) => problems.push({ where, what });
 
-let exercises, conditions, technique;
+let exercises, conditions, technique, calc, energy;
 try {
   exercises = await import("../src/data/exercises.js");
   conditions = await import("../src/data/conditions.js");
   technique = await import("../src/data/technique.js");
+  calc = await import("../src/lib/calc.js");
+  energy = await import("../src/lib/energy.js");
 } catch (e) {
   console.error("\n✗ Файл с данными не читается — скорее всего потеряна запятая или кавычка.\n");
   console.error(String(e.message).split("\n").slice(0, 6).join("\n"));
@@ -114,6 +116,29 @@ Object.keys(BW_SHARE).forEach((name) => {
   if (!EXDB[name]) fail("свой вес", `«${name}» есть в BW_SHARE, но нет в базе — опечатка в названии?`);
   else if (!EXDB[name].bw) fail("свой вес", `«${name}» помечено долей веса тела, но выполняется не своим весом`);
 });
+
+/* ---- правила подсчёта ---- */
+/* Одной рукой подход делается дважды, а повторения пишутся за одну сторону.
+   Это должно удваивать и тоннаж, и время под нагрузкой — раньше удваивался
+   только тоннаж, и унилатеральные упражнения занижали расход вдвое. */
+{
+  const set = { reps: 12, weight: 20 };
+  const plain = { name: "тест", sets: [set] };
+  const uni = { name: "тест", uni: true, sets: [set] };
+
+  if (calc.exTonnage(uni) !== calc.exTonnage(plain) * 2)
+    fail("подсчёт", "тоннаж одной рукой должен считаться за две стороны");
+  if (energy.secOfSet(set, uni) !== energy.secOfSet(set, plain) * 2)
+    fail("подсчёт", "время под нагрузкой одной рукой должно считаться за две стороны");
+  /* Замер секундомером шёл через обе стороны и уже знает правду. */
+  const timed = { reps: 12, weight: 20, sec: 44 };
+  if (energy.secOfSet(timed, uni) !== 44)
+    fail("подсчёт", "замер секундомером удваивать нельзя — он уже про обе стороны");
+  /* Две гантели — это два снаряда одновременно, а не два подхода подряд. */
+  const pair = { name: "тест", pair: true, sets: [set] };
+  if (energy.secOfSet(set, pair) !== energy.secOfSet(set, plain))
+    fail("подсчёт", "две гантели работают одновременно — время удваивать не нужно");
+}
 
 if (problems.length) {
   console.error(`\n✗ Найдено проблем: ${problems.length}\n`);

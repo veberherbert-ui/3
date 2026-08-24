@@ -125,6 +125,7 @@ await page.waitForTimeout(600);
 ok(await page.getByRole("button", { name: /подход 1: идёт/i }).first().isVisible(), "подход засекается секундомером");
 ok(await page.evaluate(() => window.__mediaPlays) === 0, "старт подхода не перехватывает звук — музыка в наушниках играет дальше",
   `запусков медиаэлемента: ${await page.evaluate(() => window.__mediaPlays)}`);
+
 await page.waitForTimeout(5600);
 await page.getByRole("button", { name: /подход 1: идёт/i }).first().click();
 await page.waitForTimeout(900);
@@ -153,12 +154,36 @@ await page.waitForTimeout(400);
 
 /* Отработанное упражнение складывается в строку: в середине тренировки
    половина списка уже сделана, и держать под ней пустые поля незачем. */
-for (const j of [2, 3]) {
-  await page.getByRole("button", { name: new RegExp(`подход ${j}: начать`, "i") }).first().click();
-  await page.waitForTimeout(150);
-  await page.getByRole("button", { name: new RegExp(`подход ${j}: идёт`, "i") }).first().click();
-  await page.waitForTimeout(250);
-}
+/* Второй подход заканчиваем не своей кнопкой, а полосой сверху: часы больше
+   не уезжают вместе со списком, и до конца отдыха не надо мотать обратно. */
+const panel = page.locator("#tabpanel");
+await page.getByRole("button", { name: /подход 2: начать/i }).first().click();
+await page.waitForTimeout(400);
+const doneBtn = page.getByRole("button", { name: "Готово", exact: true });
+ok(await doneBtn.isVisible(), "у идущего подхода есть своя полоса с крупным счётчиком");
+await panel.evaluate((el) => el.scrollBy(0, 600));
+await page.waitForTimeout(600);
+const runBox = await doneBtn.boundingBox();
+ok(!!runBox && runBox.y < 120, "полоса подхода остаётся сверху при прокрутке", `y = ${Math.round(runBox?.y ?? -1)}`);
+/* Прилипнув, полоса сжимается до строки — иначе она съедает пол-экрана. */
+const runTall = await page.locator("div:has(> button:text-is('Готово'))").last().boundingBox();
+ok(!!runTall && runTall.height < 70, "висящая полоса сжата до строки", `${Math.round(runTall?.height ?? -1)}px`);
+await doneBtn.click();
+await page.waitForTimeout(700);
+ok(await page.getByRole("button", { name: /подход 2: снять отметку/i }).first().isVisible(), "подход, законченный с полосы, отмечен");
+const skipBox = await page.getByRole("button", { name: "Пропустить", exact: true }).boundingBox();
+ok(!!skipBox && skipBox.y < 120, "полоса отдыха тоже остаётся на виду", `y = ${Math.round(skipBox?.y ?? -1)}`);
+await panel.evaluate((el) => el.scrollTo(0, 0));
+await page.waitForTimeout(600);
+/* Наверху — полная карточка: ±15 правят, когда на неё смотрят. */
+ok(await page.getByRole("button", { name: "+15", exact: true }).isVisible(), "наверху полоса разворачивается обратно");
+await page.getByRole("button", { name: "Пропустить", exact: true }).click();
+await page.waitForTimeout(400);
+
+await page.getByRole("button", { name: /подход 3: начать/i }).first().click();
+await page.waitForTimeout(150);
+await page.getByRole("button", { name: /подход 3: идёт/i }).first().click();
+await page.waitForTimeout(250);
 await page.waitForTimeout(400);
 const firstSet = page.getByRole("spinbutton", { name: /Жим гантелей лёжа \(горизонт\), подход 1: повторения/ });
 ok(!(await firstSet.isVisible().catch(() => false)), "отработанное упражнение свёрнуто в строку");

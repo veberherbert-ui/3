@@ -593,11 +593,55 @@ function TagPicker({ tags = [], onToggle }) {
 /* Отдых считается от метки времени в самой сессии, а сессия сохраняется —
    поэтому таймер переживает сворачивание и перезапуск приложения. */
 
+/** Прилипла ли полоса к верху списка. Нужен маячок над ней: пока он виден,
+    полоса стоит на своём месте; пропал из виду — значит, висит сверху,
+    и её пора сжать до строки, чтобы не съедала пол-экрана. */
+function useStuck() {
+  /* Ссылка через состояние, а не useRef: маячок появляется не сразу вместе
+     с вкладкой, а когда началась тренировка, — и обычная ссылка к этому
+     моменту уже никого не разбудит. */
+  const [mark, setMark] = useState(null);
+  const [stuck, setStuck] = useState(false);
+  useEffect(() => {
+    const root = document.getElementById("tabpanel");
+    if (!mark || !root || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(([e]) => setStuck(!e.isIntersecting), { root, threshold: 0 });
+    io.observe(mark);
+    return () => io.disconnect();
+  }, [mark]);
+  return { ref: setMark, stuck };
+}
+
+/** Полоса идущего подхода: секундомер видно из любого места списка,
+    и закончить подход можно оттуда же, не отматывая к своей карточке. */
+function RunBar({ run, exName, onStop, compact }) {
+  useTicker(true);
+  const sec = Math.floor((Date.now() - run.at) / 1000);
+  return (
+    <div className={`rounded-xl flex items-center gap-2.5 ${compact ? "px-3 py-1.5 mb-2" : "px-3.5 py-2.5 mb-3"}`}
+      style={{ background: C.surface, border: `1px solid ${C.mustard}` }}>
+      <Timer size={compact ? 14 : 12} color={C.mustard} className="shrink-0" />
+      {!compact && (
+        <div className="min-w-0 flex-1">
+          <div className="f-body text-2xs uppercase tracking-wide" style={{ color: C.mustard }}>Подход {run.j + 1}</div>
+          <div className="f-body text-xs mt-0.5 truncate" style={{ color: C.dim }}>{exName}</div>
+        </div>
+      )}
+      <div className={`f-num font-bold leading-none tabular-nums shrink-0 ${compact ? "text-2xl" : "text-3xl"}`} style={{ color: C.mustard }}>
+        {fmtClock(sec * 1000)}
+      </div>
+      {compact && <div className="f-body text-xs truncate min-w-0 flex-1" style={{ color: C.dim }}>{exName}</div>}
+      <button onClick={onStop} className="f-body rounded-lg px-3.5 text-sm font-semibold shrink-0"
+        style={{ background: C.mustard, color: C.bg, minHeight: 44 }}>Готово</button>
+    </div>
+  );
+}
+
 /**
  * Полоса отдыха во всю ширину: крупный счётчик, убывающая заливка,
  * подстройка длительности на месте и сигнал в конце.
  */
-function RestBar({ rest, onDone, onAdjust, onSkip, muted }) {
+function RestBar({ rest, onDone, onAdjust, onSkip, muted, compact }) {
   useTicker(true);
   const { until, total, exName } = rest;
   const leftMs = until - Date.now();
@@ -656,6 +700,28 @@ function RestBar({ rest, onDone, onAdjust, onSkip, muted }) {
   const pct = total > 0 ? Math.max(0, Math.min(100, (leftMs / (total * 1000)) * 100)) : 0;
   const accent = done ? C.moss : left <= 10 ? C.mustard : C.red;
 
+  /* Прилипнув к верху, полоса ужимается до строки: счётчик, упражнение и
+     одна кнопка. ±15 остаются в полной карточке — их правят, когда на неё
+     смотрят, а не на бегу. Заливка уходит в тонкую полосу под строкой. */
+  if (compact) return (
+    <div className="rounded-xl mb-2 overflow-hidden" style={{ background: C.surface, border: `1px solid ${accent}` }}>
+      <div className="px-3 py-1.5 flex items-center gap-2.5">
+        <Timer size={14} color={accent} className="shrink-0" />
+        <div className="f-num text-2xl font-bold leading-none tabular-nums shrink-0" style={{ color: accent }}>
+          {done ? "0:00" : fmtClock(left * 1000)}
+        </div>
+        <div className="f-body text-xs truncate min-w-0 flex-1" style={{ color: C.dim }}>{done ? "Отдых окончен" : exName}</div>
+        <button onClick={done ? onDone : onSkip} className="f-body rounded-lg px-3 text-xs font-medium shrink-0"
+          style={{ background: done ? accent : C.surfaceHi, color: done ? C.bg : C.dim, border: `1px solid ${done ? accent : C.line}`, minHeight: 44 }}>
+          {done ? "Продолжить" : "Пропустить"}
+        </button>
+      </div>
+      <div className="h-1" style={{ background: C.line }}>
+        <div className="h-full" style={{ width: `${pct}%`, background: accent, transition: "width 1s linear" }} />
+      </div>
+    </div>
+  );
+
   return (
     <div className="rounded-xl overflow-hidden mb-3" style={{ background: C.surface, border: `1px solid ${accent}` }}>
       <div className="px-3.5 pt-3 pb-2.5 flex items-center gap-3">
@@ -698,6 +764,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
   const [sheet, setSheet] = useState(null);
   /* Поля повторений — чтобы поставить курсор туда, где не хватает цифры. */
   const fieldRefs = useRef({});
+  const { ref: topMark, stuck: stuckTop } = useStuck();
   const [blanksWarn, setBlanksWarn] = useState(false);
 
   const day = days.find((d) => d.id === pickDay) || days[0];
@@ -901,19 +968,51 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
     onFinish({ id: session.id, date: session.date, dayId: session.dayId, dayLabel: session.dayLabel, note: session.note, durationMin: Math.max(1, Math.round(ms / 60000)), exercises: cleaned });
   };
 
+  /* Идущий подход держим под рукой так же, как отдых: индекс ищем по имени,
+     потому что список можно переставить прямо во время отсчёта. */
+  const runIdx = run ? session.exercises.findIndex((e) => e.name === run.name) : -1;
+
   return (
     <div className="px-4 pt-3 pb-10">
-      {session.rest && (
-        <RestBar
-          rest={session.rest}
-          muted={muted}
-          onDone={clearRest}
-          onSkip={clearRest}
-          onAdjust={(dir) => {
-            adjustRest(dir);
-            setRestOverride(session.rest.exName, stepRest(session.rest.total, dir));
-          }}
-        />
+      {/* Маячок: пока он в поле зрения, полоса ниже стоит на месте. */}
+      <div ref={topMark} style={{ height: 1 }} aria-hidden="true" />
+      {/* Часы не должны уезжать вверх вместе со списком: до конца отдыха
+          приходилось прокручивать обратно, а закончить подход можно было
+          только с кнопки своего упражнения. Теперь то, что тикает, висит
+          сверху — и сжимается до строки, чтобы не занимать пол-экрана. */}
+      {(session.rest || run) && (
+        <div style={{
+          position: "sticky", top: 0, zIndex: 20, background: C.bg,
+          marginLeft: -16, marginRight: -16, paddingLeft: 16, paddingRight: 16,
+          /* Прилипнув, полоса должна читаться как слой над списком, а не как
+             его первая карточка: отступ сверху и тень снизу. */
+          paddingTop: stuckTop ? 6 : 0, paddingBottom: stuckTop ? 4 : 0,
+          boxShadow: stuckTop ? "0 10px 12px -10px rgba(0,0,0,.9)" : "none",
+        }}>
+          {run && runIdx >= 0 ? (
+            <RunBar
+              run={run}
+              exName={run.name}
+              compact={stuckTop}
+              onStop={() => {
+                const sec = Math.round((Date.now() - run.at) / 1000);
+                finishSet(runIdx, run.j, sec >= SEC_MIN_MEASURED ? sec : null);
+              }}
+            />
+          ) : session.rest ? (
+            <RestBar
+              rest={session.rest}
+              muted={muted}
+              compact={stuckTop}
+              onDone={clearRest}
+              onSkip={clearRest}
+              onAdjust={(dir) => {
+                adjustRest(dir);
+                setRestOverride(session.rest.exName, stepRest(session.rest.total, dir));
+              }}
+            />
+          ) : null}
+        </div>
       )}
 
       <div className="rounded-xl px-3.5 py-3" style={{ background: C.surfaceHi, border: `1px solid ${session.paused ? C.mustard : C.line}` }}>
@@ -2437,7 +2536,7 @@ function BodyTab({ metrics, profile, setProfile, onAdd, onDelete, workouts, rest
                   energy.measured >= 0.5
                     ? `по секундомеру подходов${energy.measured < 1 ? " (часть оценена)" : ""}`
                     : "оценка по темпу, около трёх секунд на повторение"
-                }`} />
+                }${energy.uniEstimate ? " · одной рукой считается за две стороны" : ""}`} />
               <CalcLine k="Вес тела" v={`${energy.bodyKg} кг`} hint={`замер ${fmtDate(energy.weightDate)}`} />
               <CalcLine k="Всего" v={`${energy.gross} ккал`}
                 hint={`${met} × 3,5 × ${energy.bodyKg} ÷ 200 × ${energy.minutes}`} />
