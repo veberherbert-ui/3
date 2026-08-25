@@ -1371,7 +1371,10 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
 
    Пустой набор означает «всё есть»: пока инвентарь не трогали, приложение
    ведёт себя как раньше. */
-function GearCard({ gear, setGear }) {
+/* flush — карточка без собственной рамки: она встраивается строкой в общий
+   блок настроек подбора. Отдельной карточкой инвентарь выглядел ровно как
+   тренировочный день и потому читался как ещё один день. */
+function GearCard({ gear, setGear, flush }) {
   const [open, setOpen] = useState(false);
   const on = (id) => !gear.length || gear.includes(id);
   const toggle = (id) => {
@@ -1383,12 +1386,14 @@ function GearCard({ gear, setGear }) {
   const count = Object.keys(EXDB).filter((n) => fitsGear(n, gear)).length;
 
   return (
-    <div className="rounded-xl mb-3 overflow-hidden" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
-      <button onClick={() => setOpen((v) => !v)} className="w-full flex items-center justify-between px-3.5 py-3">
-        <span className="min-w-0 text-left">
+    <div className={flush ? "overflow-hidden" : "rounded-xl mb-3 overflow-hidden"}
+      style={flush ? null : { background: C.surface, border: `1px solid ${C.line}` }}>
+      <button onClick={() => setOpen((v) => !v)} className="w-full flex items-center gap-2.5 px-3.5 py-3">
+        {flush && <Dumbbell size={15} color={C.dim} className="shrink-0" />}
+        <span className="min-w-0 text-left flex-1">
           <span className="f-display text-sm font-semibold block" style={{ color: C.chalk }}>Мой инвентарь</span>
           <span className="f-body text-2xs block" style={{ color: C.dim }}>
-            {gear.length ? `${gear.length} из ${GEAR.length} — доступно ${count} упражнений` : "всё оборудование зала"}
+            {gear.length ? `${gear.length} из ${GEAR.length} — доступно ${count} ${plural(count, "упражнение", "упражнения", "упражнений")}` : "всё оборудование зала"}
           </span>
         </span>
         {open ? <ChevronUp size={15} color={C.dim} /> : <ChevronDown size={15} color={C.dim} />}
@@ -1586,7 +1591,7 @@ function DaysEditor({ days, setDays, conditions, gear }) {
                 <div className="min-w-0 text-left">
                   <div className="f-display text-sm font-semibold truncate" style={{ color: C.chalk }}>{d.name}</div>
                   <div className="f-body text-xs flex items-center gap-2" style={{ color: C.dim }}>
-                    <span>{d.exercises.length} упражнений</span>
+                    <span>{d.exercises.length} {plural(d.exercises.length, "упражнение", "упражнения", "упражнений")}</span>
                     {warn.avoid > 0 && <span className="flex items-center gap-0.5" style={{ color: C.redText }}><ShieldAlert size={11} />{warn.avoid}</span>}
                     {warn.care > 0 && <span className="flex items-center gap-0.5" style={{ color: C.mustard }}><TriangleAlert size={11} />{warn.care}</span>}
                   </div>
@@ -1717,11 +1722,19 @@ function BaseTab({ days, setDays, initialView, conditions, gear, setGear, profil
         : (
           <>
             <DaysEditor days={days} setDays={setDays} conditions={conditions} gear={gear} />
-            {/* Инвентарь и травмы — два фильтра подбора, и живут они здесь,
-                рядом с программой, а не в «Теле» и не в каталоге. */}
-            <div className="mt-3 space-y-3">
-              <GearCard gear={gear} setGear={setGear} />
-              <ConditionsCard profile={profile} setProfile={setProfile} />
+            {/* Инвентарь и травмы — не дни, а условия, при которых дни
+                собираются. Поэтому у них другая грамматика: общий блок под
+                своим заголовком, со значком у каждой строки и без рамки
+                вокруг каждой. Двумя отдельными карточками они выглядели
+                в точности как тренировочные дни и с ними и путались. */}
+            <div className="f-body text-xs uppercase tracking-wide mt-5 mb-1.5" style={{ color: C.dim }}>
+              Что учитывать при подборе
+            </div>
+            <div className="rounded-xl overflow-hidden" style={{ background: C.surfaceHi, border: `1px solid ${C.line}` }}>
+              <GearCard gear={gear} setGear={setGear} flush />
+              <div style={{ borderTop: `1px solid ${C.line}` }}>
+                <ConditionsCard profile={profile} setProfile={setProfile} flush />
+              </div>
             </div>
           </>
         )}
@@ -2480,19 +2493,19 @@ const DUR_SOURCE = {
 };
 
 /** Выбор своих травм и состояний. Отсюда берутся предупреждения по всему приложению. */
-function ConditionsCard({ profile, setProfile }) {
+function ConditionsCard({ profile, setProfile, flush }) {
   const [open, setOpen] = useState(false);
   const picked = profile.conditions || [];
   const toggle = (id) =>
     setProfile({ ...profile, conditions: picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id] });
 
   return (
-    <div className="rounded-xl p-3.5" style={{ background: C.surface, border: `1px solid ${picked.length ? C.mustard : C.line}` }}>
-      <button onClick={() => setOpen(!open)} className="w-full flex items-center justify-between gap-2">
-        <div className="min-w-0 text-left">
-          <div className="f-display text-sm font-semibold flex items-center gap-1.5" style={{ color: C.chalk }}>
-            <ShieldAlert size={14} color={picked.length ? C.mustard : C.dim} /> Травмы и ограничения
-          </div>
+    <div className={flush ? "px-3.5 py-3" : "rounded-xl p-3.5"}
+      style={flush ? null : { background: C.surface, border: `1px solid ${picked.length ? C.mustard : C.line}` }}>
+      <button onClick={() => setOpen(!open)} className="w-full flex items-center justify-between gap-2.5">
+        <ShieldAlert size={15} color={picked.length ? C.mustard : C.dim} className="shrink-0" />
+        <div className="min-w-0 text-left flex-1">
+          <div className="f-display text-sm font-semibold" style={{ color: C.chalk }}>Травмы и ограничения</div>
           <div className="f-body text-xs truncate" style={{ color: C.dim }}>
             {picked.length ? picked.map((id) => CONDITION_BY_ID[id]?.name).filter(Boolean).join(", ") : "не выбрано — предупреждений не будет"}
           </div>

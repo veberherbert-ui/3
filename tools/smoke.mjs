@@ -638,6 +638,11 @@ section("Сплиты под инвентарь");
    список того, чего у человека нет. */
 /* инвентарь теперь лежит прямо в «Плане», рядом с днями */
 await tab("План");
+/* Инвентарь и травмы — не дни: у них свой заголовок и общий блок, иначе
+   они читались как ещё две карточки дня. */
+const planText = await page.locator('[role="tabpanel"]').innerText();
+ok(/ЧТО УЧИТЫВАТЬ ПРИ ПОДБОРЕ|Что учитывать при подборе/i.test(planText),
+  "фильтры подбора отделены заголовком от тренировочных дней");
 await page.getByRole("button", { name: /Мой инвентарь/i }).first().click();
 await page.waitForTimeout(400);
 await page.getByRole("button", { name: "Турник, брусья, пол", exact: true }).click();
