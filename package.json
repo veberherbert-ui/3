@@ -9,7 +9,9 @@
     "check": "node tools/check-data.mjs",
     "build": "node tools/check-data.mjs && vite build",
     "preview": "vite preview",
-    "smoke": "node tools/smoke.mjs",
+    "smoke": "node tools/smoke.mjs && SMOKE_DEVICE=\"Galaxy S8\" node tools/smoke.mjs",
+    "smoke:ios": "node tools/smoke.mjs",
+    "smoke:android": "SMOKE_DEVICE=\"Galaxy S8\" node tools/smoke.mjs",
     "icons": "node tools/make-icons.mjs"
   },
   "repository": {

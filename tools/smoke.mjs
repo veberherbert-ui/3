@@ -31,7 +31,15 @@ const section = (t) => console.log(`\n── ${t} ──`);
 
 const browser = await chromium.launch();
 const TZ = "Europe/Moscow";
-const ctx = await browser.newContext({ ...devices["iPhone 13"], locale: "ru-RU", timezoneId: TZ });
+/* Прогон идёт и на айфоне, и на андроиде: SMOKE_DEVICE выбирает какой.
+   Движок один и тот же, а вот размер экрана, плотность пикселей и набор
+   доступных возможностей разные — и ломается обычно именно на этом. */
+const DEVICE = process.env.SMOKE_DEVICE || "iPhone 13";
+if (!devices[DEVICE]) {
+  console.error(`Нет такого устройства: ${DEVICE}`);
+  process.exit(2);
+}
+const ctx = await browser.newContext({ ...devices[DEVICE], locale: "ru-RU", timezoneId: TZ });
 const page = await ctx.newPage();
 
 const errors = [];
@@ -75,6 +83,7 @@ await page.addInitScript(() => {
 await page.goto(URL, { waitUntil: "networkidle" });
 await page.waitForTimeout(1200);
 
+console.log(`\nУстройство: ${DEVICE}`);
 section("Загрузка и вкладки");
 ok((await page.title()) === "Железный дневник", "заголовок страницы");
 
@@ -545,6 +554,72 @@ await page.getByRole("button", { name: /Завершить и сохранить
 await page.waitForTimeout(1200);
 ok((await dbRead("workouts"))?.length === beforeBackup + 1, "новая тренировка записывается без сети");
 await ctx.setOffline(false);
+
+section("Андроид");
+/* Системная кнопка «назад» — на андроиде основной способ закрыть что угодно.
+   Без своей записи в истории она закрывала бы не лист, а всё приложение. */
+await page.locator('button[aria-label="Настройки"]').click();
+await page.waitForTimeout(500);
+ok(await page.getByRole("button", { name: "Проверить" }).isVisible(), "настройки открыты");
+const histBefore = await page.evaluate(() => history.length);
+await page.goBack();
+await page.waitForTimeout(600);
+ok(!(await page.getByRole("button", { name: "Проверить" }).isVisible().catch(() => false)), "«назад» закрывает лист, а не приложение");
+ok(await page.locator('button[aria-label="Настройки"]').isVisible(), "приложение осталось на месте");
+
+/* Один лист сменяется другим (восстановление копии закрывает настройки):
+   записей в истории всё равно должна остаться одна, иначе «назад» придётся
+   жать дважды на один видимый лист. */
+await page.locator('button[aria-label="Настройки"]').click();
+await page.waitForTimeout(500);
+await page.getByRole("button", { name: "Восстановить из копии" }).click();
+await page.waitForTimeout(600);
+ok(await page.getByRole("button", { name: /Выбрать файл копии/ }).isVisible(), "лист сменился на восстановление");
+ok(await page.evaluate(() => history.length) === histBefore, "смена листа не плодит записей в истории",
+  `${histBefore} → ${await page.evaluate(() => history.length)}`);
+await page.goBack();
+await page.waitForTimeout(600);
+ok(!(await page.getByRole("button", { name: /Выбрать файл копии/ }).isVisible().catch(() => false)), "«назад» закрывает и его");
+ok(await page.locator('button[aria-label="Настройки"]').isVisible(), "приложение по-прежнему на месте");
+
+/* Закрыли кнопкой — своя запись из истории тоже должна уйти, иначе
+   следующее «назад» сработает вхолостую и всё-таки закроет приложение. */
+const histIdle = await page.evaluate(() => history.length);
+for (let i = 0; i < 3; i++) {
+  await page.locator('button[aria-label="Настройки"]').click();
+  await page.waitForTimeout(400);
+  await page.getByRole("button", { name: "Закрыть", exact: true }).last().click();
+  await page.waitForTimeout(500);
+}
+const histAfter = await page.evaluate(() => history.length);
+ok(histAfter === histIdle, "закрытие кнопкой убирает за собой запись в истории", `${histIdle} → ${histAfter} после трёх открытий`);
+
+/* Подсказки про телефон должны совпадать с телефоном. Переключателя «без
+   звука» сбоку на андроиде нет, переключателя задач тоже — и советовать
+   их там значит сбить человека с толку в единственном месте, где он
+   пришёл за помощью. */
+await page.locator('button[aria-label="Настройки"]').click();
+await page.waitForTimeout(500);
+const hints = await page.locator("body").innerText();
+const iosOnly = ["iPhone", "сбоку", "Safari"].filter((w) => hints.includes(w));
+if (/iPhone|iPad/.test(DEVICE)) ok(hints.includes("сбоку"), "на айфоне сказано про переключатель звука сбоку");
+else ok(iosOnly.length === 0, "на андроиде нет советов из чужой системы", iosOnly.join(", "));
+await page.getByRole("button", { name: "Закрыть", exact: true }).last().click();
+await page.waitForTimeout(500);
+
+/* Ничего не должно вылезать за правый край: на андроиде экраны бывают
+   уже айфоновских, и горизонтальная прокрутка ломает всё разом. */
+for (const name of ["Сессия", "Журнал", "Графики", "База", "Тело"]) {
+  await tab(name);
+  const over = await page.evaluate(() => {
+    const el = document.getElementById("tabpanel");
+    const wide = [...el.querySelectorAll("*")]
+      .filter((n) => n.getBoundingClientRect().right > document.documentElement.clientWidth + 1)
+      .map((n) => `${n.tagName.toLowerCase()}.${(n.className || "").toString().slice(0, 30)}`);
+    return { scroll: el.scrollWidth > el.clientWidth + 1, wide: wide.slice(0, 3) };
+  });
+  ok(!over.scroll, `вкладка «${name}» не уезжает вбок`, over.wide.join(" | "));
+}
 
 section("Читаемость и доступность");
 const a11y = await page.evaluate(() => {

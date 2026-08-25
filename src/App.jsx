@@ -23,6 +23,8 @@ import { workoutEnergy } from "./lib/energy.js";
 import { summary, movers, weeklyVolume, muscleWeek, compare } from "./lib/progress.js";
 import { primeAudio, playRestOver, scheduleRestOver, cancelScheduled, vibrate, tapBuzz, releaseAudio, audioReady, setAudioMode } from "./lib/sound.js";
 import { notifyState, askNotify, scheduleRestNotice, cancelRestNotice } from "./lib/notify.js";
+import { openBack, closeBack } from "./lib/backstack.js";
+import { isIOS, isAndroid } from "./lib/platform.js";
 import { useWakeLock } from "./lib/wakelock.js";
 import { buildLabel, checkForUpdate, reloadOnUpdate } from "./lib/update.js";
 import { useAppearance, TEXT_SIZES } from "./lib/appearance.js";
@@ -46,11 +48,20 @@ const Chip = ({ label, value, sub, accent }) => (
     {sub && <div className="f-body text-xs mt-0.5" style={{ color: C.dim }}>{sub}</div>}
   </div>
 );
-const Sheet = ({ children, onClose }) => (
-  <div className="sheet-scrim fixed inset-0 z-50 flex items-end justify-center" style={{ background: "rgba(0,0,0,.55)" }} onClick={onClose}>
-    <div className="sheet-panel w-full max-w-xl rounded-t-2xl p-4 max-h-[85vh] overflow-y-auto" style={{ background: C.surface }} onClick={(e) => e.stopPropagation()}>{children}</div>
-  </div>
-);
+const Sheet = ({ children, onClose }) => {
+  /* Кнопка «назад» на андроиде должна закрывать лист, а не приложение. */
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    const entry = openBack(() => close.current?.());
+    return () => closeBack(entry);
+  }, []);
+  return (
+    <div className="sheet-scrim fixed inset-0 z-50 flex items-end justify-center" style={{ background: "rgba(0,0,0,.55)" }} onClick={onClose}>
+      <div className="sheet-panel w-full max-w-xl rounded-t-2xl p-4 max-h-[85vh] overflow-y-auto" style={{ background: C.surface }} onClick={(e) => e.stopPropagation()}>{children}</div>
+    </div>
+  );
+};
 /** Строка разбора расчёта: слева что, справа сколько и откуда. */
 const CalcLine = ({ k, v, hint }) => (
   <div className="py-1.5" style={{ borderTop: `1px solid ${C.line}` }}>
@@ -2888,7 +2899,11 @@ export default function App() {
           </button>
           <div className="f-body text-xs mt-2 leading-relaxed" style={{ color: C.dim }}>
             Приложение обновляется само, но новая версия включается при следующем запуске.
-            На iPhone это значит закрыть его из переключателя задач, а не просто свернуть.
+            {isIOS()
+              ? " На iPhone это значит закрыть его из переключателя задач, а не просто свернуть."
+              : isAndroid()
+                ? " Это значит закрыть его из списка недавних приложений, а не просто свернуть."
+                : ""}
           </div>
           <button onClick={() => setShowTerms(false)} className="f-body w-full mt-3 py-3 text-sm" style={{ color: C.dim }}>Закрыть</button>
         </Sheet>
@@ -2958,7 +2973,7 @@ export default function App() {
               Сигнал: {muted ? "выкл" : "вкл"}
             </button>
             <button
-              onClick={() => { primeAudio(); playRestOver(); setTimeout(() => say(audioReady() ? (soundSolo ? "Не слышно? Проверь громкость" : "Не слышно? Проверь переключатель звука сбоку телефона") : "Система не пустила звук — попробуй ещё раз"), 700); }}
+              onClick={() => { primeAudio(); playRestOver(); setTimeout(() => say(audioReady() ? (soundSolo || !isIOS() ? "Не слышно? Прибавь громкость — сигнал идёт как музыка" : "Не слышно? Проверь переключатель звука сбоку телефона") : "Система не пустила звук — попробуй ещё раз"), 700); }}
               disabled={muted}
               className="f-body flex-1 rounded-xl py-3 text-sm flex items-center justify-center gap-2"
               style={{ background: C.surfaceHi, color: muted ? C.dim : C.chalk, border: `1px solid ${C.line}` }}>
@@ -2972,7 +2987,7 @@ export default function App() {
           {!muted && (
             <div className="rounded-xl mb-2 overflow-hidden" style={{ background: C.surfaceHi, border: `1px solid ${C.line}` }}>
               {[
-                { v: false, t: "Не мешать музыке", d: "Сигнал звучит поверх плеера. Молчит, если сбоку включён «без звука», и не срабатывает из свёрнутого приложения." },
+                { v: false, t: "Не мешать музыке", d: `Сигнал звучит поверх плеера${isIOS() ? ", но молчит, если сбоку включён «без звука»" : ""}. Из свёрнутого приложения не срабатывает.` },
                 { v: true, t: "Сигнал важнее музыки", d: "Слышно всегда и даже из фона, но плеер в наушниках встаёт на паузу на время тренировки." },
               ].map(({ v, t, d }) => (
                 <button key={String(v)} onClick={() => { setProfile((p) => ({ ...p, soundSolo: v })); primeAudio(); }}
@@ -3008,7 +3023,9 @@ export default function App() {
               <span className="block f-body text-2xs mt-0.5" style={{ color: C.dim }}>
                 {notifyOk === "запрещено"
                   ? "Разрешить можно только в настройках телефона — приложение спросить больше не может."
-                  : "Приходит, когда приложение свёрнуто, а телефон в руке. На iPhone свёрнутое приложение засыпает, и уведомление придёт при возвращении — там надёжнее сигнал в наушники."}
+                  : isIOS()
+                    ? "Приходит, когда приложение свёрнуто, а телефон в руке. На iPhone свёрнутое приложение засыпает вместе со своими часами, и уведомление придёт при возвращении — здесь надёжнее сигнал в наушники."
+                    : "Приходит, когда приложение свёрнуто, а телефон в руке. Браузер притормаживает фоновые часы, так что уведомление может опоздать примерно на минуту."}
               </span>
             </span>
           </button>
