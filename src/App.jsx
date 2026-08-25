@@ -1052,6 +1052,18 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
     const last = e.sets[e.sets.length - 1] || { reps: "", weight: "" };
     e.sets = [...e.sets, { reps: "", weight: last.weight, done: false, sec: null }]; ex[i] = e; return { ...s, exercises: ex };
   });
+  /* Убрать последний подход. Добавить их можно было всегда, а убрать —
+     нет: лишняя строка потом просто не сохранялась, но человек об этом
+     не знает и сидит с подходом, которого не делал. Убираем именно
+     последний: посреди тренировки лишним оказывается тот, что дописали. */
+  const rmSet = (i) => setSession((s) => {
+    const ex = [...s.exercises];
+    const e = { ...ex[i] };
+    if (e.sets.length < 2) return s;
+    e.sets = e.sets.slice(0, -1);
+    ex[i] = e;
+    return { ...s, exercises: ex };
+  });
   const rmExercise = (i) => setSession((s) => ({ ...s, exercises: s.exercises.filter((_, k) => k !== i) }));
   const toggleTag = (i, id) => setSession((s) => {
     const list = [...s.exercises];
@@ -1251,7 +1263,26 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
                   </div>
                 ))}
               </div>
-              <button onClick={() => addSet(i)} className="tap-inline f-body mt-2 py-1.5 text-xs" style={{ color: C.mossText }}>+ подход</button>
+              {/* Убрать — рядом с добавить, а не крестиком в каждой строке:
+                  строка подхода и так из четырёх элементов, а на узком
+                  экране пятый уже не помещается. Отработанный подход
+                  просто так не удаляется — он спросит. */}
+              <div className="flex items-center gap-4 mt-2">
+                <button onClick={() => addSet(i)} className="tap-inline f-body py-1.5 text-xs" style={{ color: C.mossText }}>+ подход</button>
+                {ex.sets.length > 1 && (() => {
+                  const last = ex.sets[ex.sets.length - 1];
+                  const filled = last.done || !blank(last.reps) || !blank(last.weight);
+                  return filled ? (
+                    <ConfirmButton onConfirm={() => rmSet(i)} question={`Убрать подход ${ex.sets.length}?`}
+                      className="tap-inline f-body py-1.5 text-xs" style={{ color: C.dim }}>
+                      − убрать подход
+                    </ConfirmButton>
+                  ) : (
+                    <button onClick={() => rmSet(i)} aria-label={`Убрать подход ${ex.sets.length} из «${ex.name}»`}
+                      className="tap-inline f-body py-1.5 text-xs" style={{ color: C.dim }}>− убрать подход</button>
+                  );
+                })()}
+              </div>
             </div>
           );
         })}

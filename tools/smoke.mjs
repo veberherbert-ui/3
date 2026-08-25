@@ -236,6 +236,30 @@ ok(await page.getByRole("button", { name: "+15", exact: true }).isVisible(), "н
 await page.getByRole("button", { name: "Пропустить", exact: true }).click();
 await page.waitForTimeout(400);
 
+/* Подходы можно было только добавлять. Лишняя строка потом молча
+   не сохранялась — но человек об этом не знает и сидит с подходом,
+   которого не делал. */
+const setsOf = () => page.getByRole("spinbutton", { name: /Жим гантелей лёжа \(горизонт\), подход \d+: повторения/ }).count();
+await page.getByRole("button", { name: /\+ подход/ }).first().click();
+await page.waitForTimeout(400);
+const grown = await setsOf();
+ok(grown === 4, "подход добавляется", `${grown}`);
+/* последний пустой уходит сразу, без вопросов */
+await page.getByRole("button", { name: /Убрать подход 4/ }).first().click();
+await page.waitForTimeout(400);
+ok(await setsOf() === 3, "пустой подход убирается одним нажатием", `${await setsOf()}`);
+/* а вот заполненный — только с подтверждением */
+await page.getByRole("spinbutton", { name: /подход 3: повторения/ }).first().fill("9");
+await page.waitForTimeout(300);
+await page.getByRole("button", { name: /− убрать подход/ }).first().click();
+await page.waitForTimeout(400);
+ok(await page.getByText(/Убрать подход 3\?/).isVisible(), "заполненный подход просит подтверждения");
+await page.getByRole("button", { name: "Нет", exact: true }).click();
+await page.waitForTimeout(300);
+ok(await setsOf() === 3, "отказ ничего не убрал");
+await page.getByRole("spinbutton", { name: /подход 3: повторения/ }).first().fill("");
+await page.waitForTimeout(300);
+
 await page.getByRole("button", { name: /подход 3: начать/i }).first().click();
 await page.waitForTimeout(150);
 await page.getByRole("button", { name: /подход 3: идёт/i }).first().click();
