@@ -629,6 +629,34 @@ for (let i = 0; i < 3; i++) {
 const histAfter = await page.evaluate(() => history.length);
 ok(histAfter === histIdle, "закрытие кнопкой убирает за собой запись в истории", `${histIdle} → ${histAfter} после трёх открытий`);
 
+/* Приложение тёмное — и об этом должен знать браузер, а не только наши
+   стили. Всё, что он рисует сам (полоса навигации внизу андроида, полосы
+   прокрутки, календарь в поле даты), берёт цвет из схемы. Без неё страница
+   считается светлой, и тёмное приложение получает снизу белую полосу. */
+ok(await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme) === "dark",
+  "браузеру объявлено, что приложение тёмное");
+ok(await page.evaluate(() => document.querySelector('meta[name="color-scheme"]')?.content) === "dark",
+  "схема объявлена мета-тегом — первый кадр запуска тоже тёмный");
+const canvas = await page.evaluate(() => [
+  getComputedStyle(document.documentElement).backgroundColor,
+  getComputedStyle(document.body).backgroundColor,
+]);
+ok(canvas.every((c) => c === "rgb(21, 23, 27)"), "подложка страницы закрашена до самого низа", canvas.join(" / "));
+
+/* Приложение тёмное — и об этом должен знать браузер, а не только наши
+   стили. Полосу жестов внизу андроида (аналог полоски «Домой» на айфоне)
+   рисует он сам и цвет берёт из объявленной схемы. Без неё страница
+   считается светлой, и тёмное приложение получает снизу белую полосу. */
+ok(await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme) === "dark",
+  "браузеру объявлено, что приложение тёмное");
+ok(await page.evaluate(() => document.querySelector('meta[name="color-scheme"]')?.content) === "dark",
+  "схема объявлена мета-тегом — первый кадр запуска тоже тёмный");
+const canvasBg = await page.evaluate(() => [
+  getComputedStyle(document.documentElement).backgroundColor,
+  getComputedStyle(document.body).backgroundColor,
+]);
+ok(canvasBg.every((c) => c === "rgb(21, 23, 27)"), "подложка страницы закрашена до самого низа", canvasBg.join(" / "));
+
 /* Подсказки про телефон должны совпадать с телефоном. Переключателя «без
    звука» сбоку на андроиде нет, переключателя задач тоже — и советовать
    их там значит сбить человека с толку в единственном месте, где он

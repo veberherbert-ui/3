@@ -14,6 +14,10 @@
 @tailwind utilities;
 
 :root {
+  /* Тёмная тема — не выбор пользователя, а единственная. Браузер должен
+     знать: от этого зависят цвета всего, что рисует он сам. */
+  color-scheme: dark;
+
   --bg: #15171b;
   /* высота полосы жестов внизу iPhone и «чёлки» сверху */
   --safe-top: env(safe-area-inset-top, 0px);
@@ -170,8 +174,12 @@ button,
   animation: tab-in 140ms ease-out;
 }
 
+/* Значок календаря в поле даты раньше приходилось выворачивать наизнанку:
+   браузер рисовал его чёрным по тёмному, потому что считал страницу светлой.
+   С объявленной тёмной схемой он и так светлый — инверсия сделала бы его
+   обратно чёрным. */
 input[type="date"]::-webkit-calendar-picker-indicator {
-  filter: invert(0.7);
+  opacity: 0.7;
 }
 input[type="number"]::-webkit-outer-spin-button,
 input[type="number"]::-webkit-inner-spin-button {
