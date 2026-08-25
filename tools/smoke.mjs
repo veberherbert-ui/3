@@ -29,6 +29,19 @@ const ok = (cond, label, extra = "") => {
 };
 const section = (t) => console.log(`\n── ${t} ──`);
 
+/* Дождаться появления, а не подглядеть один раз. isVisible() возвращает
+   ответ мгновенно: на загруженной машине первый кадр приложения приходит
+   позже фиксированной паузы, и проверка падала не по делу. Врущий тест
+   хуже отсутствующего — на него перестают смотреть. */
+const visible = async (loc, ms = 8000) => {
+  try {
+    await loc.first().waitFor({ state: "visible", timeout: ms });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const browser = await chromium.launch();
 const TZ = "Europe/Moscow";
 /* Прогон идёт и на айфоне, и на андроиде: SMOKE_DEVICE выбирает какой.
@@ -88,14 +101,14 @@ section("Загрузка и вкладки");
 ok((await page.title()) === "Железный дневник", "заголовок страницы");
 
 /* экран первого запуска с ограничениями */
-ok(await page.getByText("Это не медицина").isVisible(), "показан экран с ограничениями");
+ok(await visible(page.getByText("Это не медицина")), "показан экран с ограничениями");
 await page.getByRole("button", { name: /Понятно, начать/ }).click();
 await page.waitForTimeout(700);
 ok(!(await page.getByText("Это не медицина").isVisible().catch(() => false)), "после принятия экран не мешает");
 
 /* Знакомство: без роста, веса и возраста половина расчётов пустая,
    поэтому их спрашивают сразу, а не прячут во вкладку «Тело». */
-ok(await page.getByText("Пара чисел о вас").isVisible(), "после условий спрашивают рост, вес, возраст");
+ok(await visible(page.getByText("Пара чисел о вас")), "после условий спрашивают рост, вес, возраст");
 await page.getByRole("spinbutton", { name: "Рост, см" }).fill("180");
 await page.getByRole("spinbutton", { name: "Вес, кг" }).fill("82");
 await page.getByRole("spinbutton", { name: "Возраст, лет" }).fill("35");
@@ -117,7 +130,7 @@ section("Тренировка");
 await tab("Сессия");
 await page.getByRole("button", { name: /Начать тренировку/ }).click();
 await page.waitForTimeout(700);
-ok(await page.getByRole("button", { name: /Завершить и сохранить/ }).first().isVisible(), "сессия стартовала (порядок хуков цел)");
+ok(await visible(page.getByRole("button", { name: /Завершить и сохранить/ })), "сессия стартовала (порядок хуков цел)");
 
 /* у разных упражнений разное время отдыха */
 const rests = (await page.locator("div.f-num").filter({ hasText: "отдых" }).allInnerTexts())
@@ -630,20 +643,6 @@ const histAfter = await page.evaluate(() => history.length);
 ok(histAfter === histIdle, "закрытие кнопкой убирает за собой запись в истории", `${histIdle} → ${histAfter} после трёх открытий`);
 
 /* Приложение тёмное — и об этом должен знать браузер, а не только наши
-   стили. Всё, что он рисует сам (полоса навигации внизу андроида, полосы
-   прокрутки, календарь в поле даты), берёт цвет из схемы. Без неё страница
-   считается светлой, и тёмное приложение получает снизу белую полосу. */
-ok(await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme) === "dark",
-  "браузеру объявлено, что приложение тёмное");
-ok(await page.evaluate(() => document.querySelector('meta[name="color-scheme"]')?.content) === "dark",
-  "схема объявлена мета-тегом — первый кадр запуска тоже тёмный");
-const canvas = await page.evaluate(() => [
-  getComputedStyle(document.documentElement).backgroundColor,
-  getComputedStyle(document.body).backgroundColor,
-]);
-ok(canvas.every((c) => c === "rgb(21, 23, 27)"), "подложка страницы закрашена до самого низа", canvas.join(" / "));
-
-/* Приложение тёмное — и об этом должен знать браузер, а не только наши
    стили. Полосу жестов внизу андроида (аналог полоски «Домой» на айфоне)
    рисует он сам и цвет берёт из объявленной схемы. Без неё страница
    считается светлой, и тёмное приложение получает снизу белую полосу. */
@@ -656,6 +655,23 @@ const canvasBg = await page.evaluate(() => [
   getComputedStyle(document.body).backgroundColor,
 ]);
 ok(canvasBg.every((c) => c === "rgb(21, 23, 27)"), "подложка страницы закрашена до самого низа", canvasBg.join(" / "));
+
+/* «Потяни вниз, чтобы обновить» — андроидный жест, которого на айфоне нет.
+   Дёрнуть список посреди тренировки и перезагрузить приложение незачем. */
+ok(await page.evaluate(() => getComputedStyle(document.getElementById("tabpanel")).overscrollBehavior) === "contain",
+  "прокрутка списка не сцепляется со страницей — перезагрузки жестом не будет");
+ok(await page.evaluate(() => getComputedStyle(document.body).overscrollBehavior) === "none",
+  "и сама страница не отскакивает");
+
+/* Приложение на телефоне опознаётся по id, а не по адресу: иначе смена
+   адреса поставит рядом второе такое же с пустым журналом. */
+const mani = await page.evaluate(async () => {
+  const href = document.querySelector('link[rel="manifest"]')?.href;
+  return href ? (await fetch(href)).json() : null;
+});
+ok(mani?.id === "/", "у приложения постоянный id в манифесте", String(mani?.id));
+ok(mani?.theme_color === "#15171B" && mani?.background_color === "#15171B",
+  "цвета запуска и системных полос тёмные", `${mani?.theme_color} / ${mani?.background_color}`);
 
 /* Подсказки про телефон должны совпадать с телефоном. Переключателя «без
    звука» сбоку на андроиде нет, переключателя задач тоже — и советовать

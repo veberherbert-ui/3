@@ -2882,7 +2882,11 @@ export default function App() {
         </div>
       </div>
 
-      <div ref={scroller} className="flex-1 overflow-y-auto w-full max-w-xl mx-auto" role="tabpanel" id="tabpanel" aria-labelledby={`tab-${shownTab}`}>
+      {/* overscrollBehavior останавливает сцепку прокрутки прямо здесь: до body
+          она тогда не доходит, и «потяни вниз, чтобы обновить» не сработает
+          даже если список уже в самом верху. */}
+      <div ref={scroller} className="flex-1 overflow-y-auto w-full max-w-xl mx-auto" role="tabpanel" id="tabpanel"
+        style={{ overscrollBehavior: "contain" }} aria-labelledby={`tab-${shownTab}`}>
         <div key={shownTab} className="tab-in">
         {shownTab === "session" && <SessionTab session={session} setSession={setSession} workouts={workouts} days={days} onFinish={finishSession} goToDays={() => { setBaseView("days"); setTab("base"); }} conditions={conditions} restOverrides={restOverrides} setRestOverride={setRestOverride} muted={muted} bodyAt={bodyAt} gear={gear} />}
         {shownTab === "journal" && <JournalTab workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} onUpdate={updateWorkout} onAdd={addWorkout} days={days} conditions={conditions} bodyAt={bodyAt} gear={gear} />}
