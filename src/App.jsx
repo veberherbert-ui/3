@@ -25,6 +25,7 @@ import { primeAudio, playRestOver, scheduleRestOver, cancelScheduled, vibrate, t
 import { notifyState, askNotify, scheduleRestNotice, cancelRestNotice } from "./lib/notify.js";
 import { openBack, closeBack } from "./lib/backstack.js";
 import { isIOS, isAndroid } from "./lib/platform.js";
+import { adaptPreset } from "./lib/fitplan.js";
 import { useWakeLock } from "./lib/wakelock.js";
 import { buildLabel, checkForUpdate, reloadOnUpdate } from "./lib/update.js";
 import { useAppearance, TEXT_SIZES } from "./lib/appearance.js";
@@ -74,6 +75,18 @@ const CalcLine = ({ k, v, hint }) => (
     {hint && <div className="f-body text-2xs mt-0.5" style={{ color: C.dim }}>{hint}</div>}
   </div>
 );
+/* «1 замена», «2 замены», «5 замен» — иначе цифра читается как ошибка. */
+const plural = (n, one, few, many) => {
+  const a = Math.abs(n) % 100;
+  const b = a % 10;
+  if (a > 10 && a < 20) return many;
+  if (b > 1 && b < 5) return few;
+  return b === 1 ? one : many;
+};
+
+/** Порядок в списке сплитов: сперва подходящие, в конце — неподходящие. */
+const ORDER = { native: 0, adapted: 1, poor: 2 };
+
 /** Ручка перетаскивания: видимая и достаточно крупная, чтобы попасть пальцем. */
 const Grip = (props) => (
   <span {...props} aria-hidden="true"
@@ -1421,9 +1434,20 @@ function DaysEditor({ days, setDays, conditions, gear }) {
   const addEx = (id, n) => setDays(days.map((d) => (d.id === id && !d.exercises.includes(n) ? { ...d, exercises: [...d.exercises, n] } : d)));
   const delDay = (id) => setDays(days.filter((d) => d.id !== id));
   const newDay = () => { const id = uid(); setDays([...days, { id, name: "Новый день", exercises: [] }]); setOpen(id); };
+  /* Сплит добавляем уже подогнанным под инвентарь: смысл в порядке движений,
+     а каким снарядом их делать — вопрос второй. Что заменилось, видно
+     на карточке до нажатия. */
+  const fitted = useMemo(
+    () => Object.entries(PRESETS)
+      .map(([k, p]) => ({ k, p, fit: adaptPreset(p, gear) }))
+      /* Сначала то, что подходит как есть, потом требующее замен,
+         в конце — то, что этим инвентарём просто не собрать. */
+      .sort((a, b) => ORDER[a.fit.verdict] - ORDER[b.fit.verdict] || a.fit.swaps - b.fit.swaps),
+    [gear],
+  );
   const applyPreset = (key) => {
-    const p = PRESETS[key];
-    setDays([...days, ...p.days.map((d) => ({ id: uid(), name: d.name, exercises: d.ex }))]);
+    const { fit } = fitted.find((x) => x.k === key);
+    setDays([...days, ...fit.days.map((d) => ({ id: uid(), name: d.name, exercises: d.ex }))]);
     setPresets(false);
   };
 
@@ -1503,15 +1527,35 @@ function DaysEditor({ days, setDays, conditions, gear }) {
       {presets && (
         <Sheet onClose={() => setPresets(false)}>
           <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>Готовые сплиты</div>
-          <div className="f-body text-xs mb-3" style={{ color: C.dim }}>Дни добавятся к существующим — старые не удалятся.</div>
+          <div className="f-body text-xs mb-3" style={{ color: C.dim }}>
+            Дни добавятся к существующим — старые не удалятся.
+            {gear.length > 0 && " Упражнения подставятся под твой инвентарь."}
+          </div>
           <div className="space-y-2">
-            {Object.entries(PRESETS).map(([k, p]) => (
-              <button key={k} onClick={() => applyPreset(k)} className="w-full text-left rounded-xl p-3" style={{ background: C.surfaceHi, border: `1px solid ${C.line}` }}>
-                <div className="f-display text-sm font-semibold" style={{ color: C.chalk }}>{p.name}</div>
-                <div className="f-body text-xs mb-1.5" style={{ color: C.dim }}>{p.desc}</div>
-                <div className="f-body text-2xs" style={{ color: C.blueText }}>{p.days.map((d) => d.name.split(" (")[0]).join(" · ")}</div>
-              </button>
-            ))}
+            {fitted.map(({ k, p, fit }) => {
+              const poor = fit.verdict === "poor";
+              return (
+                <button key={k} onClick={() => applyPreset(k)} className="w-full text-left rounded-xl p-3"
+                  style={{ background: C.surfaceHi, border: `1px solid ${poor ? C.line : fit.verdict === "adapted" ? C.blue : C.moss}`, opacity: poor ? 0.55 : 1 }}>
+                  <div className="f-display text-sm font-semibold" style={{ color: C.chalk }}>{p.name}</div>
+                  <div className="f-body text-xs mb-1.5" style={{ color: C.dim }}>{p.desc}</div>
+                  <div className="f-body text-2xs" style={{ color: C.blueText }}>{fit.days.map((d) => d.name.split(" (")[0]).join(" · ")}</div>
+                  {/* Приговор по инвентарю. Молчим только когда сплит подходит
+                      как есть: лишняя строка на каждой карточке — шум. */}
+                  {gear.length > 0 && fit.verdict !== "native" && (
+                    <div className="f-body text-2xs mt-1.5" style={{ color: poor ? C.mustard : C.dim }}>
+                      {/* Мышцы перечисляем после двоеточия: склонять их
+                          по падежам в коде не выйдет, а «без средняя дельта»
+                          читается как поломка. */}
+                      {poor
+                        ? `Не для этого инвентаря — нечем нагрузить: ${fit.lostMuscles.join(", ").toLowerCase()}`
+                        : `Подогнан под инвентарь: ${fit.swaps} ${plural(fit.swaps, "замена", "замены", "замен")}` +
+                          (fit.lostMuscles.length ? ` · без нагрузки: ${fit.lostMuscles.join(", ").toLowerCase()}` : "")}
+                    </div>
+                  )}
+                </button>
+              );
+            })}
           </div>
           <button onClick={() => setPresets(false)} className="f-body w-full mt-3 py-3 text-sm" style={{ color: C.dim }}>Закрыть</button>
         </Sheet>

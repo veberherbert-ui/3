@@ -511,6 +511,41 @@ ok((await dbRead("profile"))?.soundSolo === false, "и переключаетс�
 await page.getByRole("button", { name: "Закрыть", exact: true }).last().click();
 await page.waitForTimeout(400);
 
+section("Сплиты под инвентарь");
+/* Готовый сплит — это порядок движений, а не список снарядов. С турником
+   и полом он должен подставить отжимания вместо жима, а не показать
+   список того, чего у человека нет. */
+await tab("База");
+await page.getByRole("button", { name: /Мой инвентарь/i }).first().click();
+await page.waitForTimeout(400);
+await page.getByRole("button", { name: "Турник и пол", exact: true }).click();
+await page.waitForTimeout(600);
+await page.getByRole("button", { name: /Мои дни/ }).click();
+await page.waitForTimeout(400);
+await page.getByRole("button", { name: /Готовый сплит/ }).click();
+await page.waitForTimeout(700);
+const sheetText = await page.locator(".sheet-panel").innerText();
+ok(/Подогнан под инвентарь/.test(sheetText), "видно, что сплит подогнан под инвентарь");
+ok(/Не для этого инвентаря/.test(sheetText), "негодный сплит помечен, а не спрятан");
+/* Подходящее — сверху, негодное — в конце: список читают с начала. */
+const firstCard = (await page.locator(".sheet-panel button").nth(0).innerText());
+ok(!/Не для этого инвентаря/.test(firstCard), "первым идёт подходящий сплит", firstCard.split("\n")[0]);
+ok(/Турник и пол/.test(firstCard), "и он собран как раз под этот инвентарь", firstCard.split("\n")[0]);
+
+/* Применяем сплит, рассчитанный на зал: он должен приехать переписанным
+   под турник, а не с недоступными упражнениями. */
+const daysBefore = ((await dbRead("days")) || []).length;
+await page.getByRole("button", { name: /Верх \/ Низ/ }).click();
+await page.waitForTimeout(900);
+const withUL = await dbRead("days");
+ok(withUL.length === daysBefore + 2, "сплит добавил свои дни", `${daysBefore} → ${withUL.length}`);
+const fittedEx = withUL.slice(-2).flatMap((d) => d.exercises);
+ok(fittedEx.length > 0, "дни не пустые");
+/* Ни одного упражнения на снаряде, которого нет в инвентаре. */
+const foreign = fittedEx.filter((n) => /гантел|блок|тренажёр|штанг|Смит|кроссовер|бабочк|EZ/i.test(n));
+ok(foreign.length === 0, "в подогнанном сплите нет упражнений на недоступных снарядах", foreign.join(", "));
+ok(fittedEx.some((n) => /Отжимания/.test(n)), "жим заменился отжиманиями — то же движение другим снарядом");
+
 section("Резервная копия");
 await page.locator('button[aria-label="Настройки"]').click();
 await page.waitForTimeout(500);
