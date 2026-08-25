@@ -11,6 +11,22 @@
 export const BUILD_ID = typeof __BUILD_ID__ === "string" ? __BUILD_ID__ : "dev";
 export const BUILD_TIME = typeof __BUILD_TIME__ === "string" ? __BUILD_TIME__ : "";
 
+/* Запущено как установленное приложение или как вкладка браузера.
+
+   Разница видна невооружённым глазом только тому, кто знает, куда смотреть,
+   а поведение разное: во вкладке нижнюю кромку экрана занимает сам браузер,
+   и ни один стиль страницы на неё не влияет. Когда отзыв приходит с чужого
+   телефона, это первое, что нужно знать. */
+export const installed = () => {
+  try {
+    return window.matchMedia?.("(display-mode: standalone)").matches
+      || window.matchMedia?.("(display-mode: fullscreen)").matches
+      || window.navigator.standalone === true;
+  } catch {
+    return false;
+  }
+};
+
 export const buildLabel = () => {
   if (!BUILD_TIME) return BUILD_ID;
   const d = new Date(BUILD_TIME);

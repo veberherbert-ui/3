@@ -27,7 +27,7 @@ import { openBack, closeBack } from "./lib/backstack.js";
 import { isIOS, isAndroid } from "./lib/platform.js";
 import { adaptPreset } from "./lib/fitplan.js";
 import { useWakeLock } from "./lib/wakelock.js";
-import { buildLabel, checkForUpdate, reloadOnUpdate } from "./lib/update.js";
+import { buildLabel, installed, checkForUpdate, reloadOnUpdate } from "./lib/update.js";
 import { useAppearance, TEXT_SIZES } from "./lib/appearance.js";
 import DisclaimerGate, { DisclaimerBody } from "./Disclaimer.jsx";
 import SetupGate from "./Setup.jsx";
@@ -2928,7 +2928,7 @@ export default function App() {
       {showTerms && (
         <Sheet onClose={() => setShowTerms(false)}>
           <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>О приложении и ограничениях</div>
-          <div className="f-body text-xs mb-3" style={{ color: C.dim }}>Версия: {buildLabel()}</div>
+          <div className="f-body text-xs mb-3" style={{ color: C.dim }}>Версия: {buildLabel()} · {installed() ? "установлено на телефон" : "открыто во вкладке браузера"}</div>
           <DisclaimerBody compact />
           <button
             onClick={async () => {
@@ -3084,6 +3084,19 @@ export default function App() {
           <div className="mb-2"><ConfirmButton onConfirm={() => { setDays(DEFAULT_DAYS); setShowSettings(false); say("Дни возвращены к исходным"); }} question="Свои дни будут заменены" className="f-body w-full rounded-xl py-3 text-sm flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><RotateCcw size={15} /> Сбросить дни к исходным</ConfirmButton></div>
           <ConfirmButton onConfirm={wipe} question="Стереть весь дневник?" className="f-body w-full rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.redText, border: `1px solid ${C.line}` }}><Trash2 size={15} /> Удалить все записи</ConfirmButton>
           <button onClick={() => setShowSettings(false)} className="f-body w-full mt-2 py-3 text-sm" style={{ color: C.dim }}>Закрыть</button>
+          {/* Версия и способ запуска — на виду и одним касанием в буфер.
+              Когда отзыв приходит с чужого телефона, первые два вопроса
+              всегда одни и те же: какая версия и открыто ли приложение
+              установленным. Заставлять человека лезть за этим на два экрана
+              вглубь — терять половину отзывов. */}
+          <button
+            onClick={async () => {
+              const line = `${buildLabel()} · ${installed() ? "установлено" : "вкладка браузера"}`;
+              try { await navigator.clipboard.writeText(line); say("Версия скопирована"); } catch { say(line); }
+            }}
+            className="f-body w-full mt-1 py-2 text-2xs" style={{ color: C.dim }}>
+            {buildLabel()} · {installed() ? "установлено" : "вкладка браузера"}
+          </button>
         </Sheet>
       )}
 

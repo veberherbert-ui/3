@@ -656,6 +656,17 @@ const canvasBg = await page.evaluate(() => [
 ]);
 ok(canvasBg.every((c) => c === "rgb(21, 23, 27)"), "подложка страницы закрашена до самого низа", canvasBg.join(" / "));
 
+/* Версия и способ запуска — на виду в настройках, а не на два экрана вглубь:
+   без них отзыв с чужого телефона нечем проверить. */
+await page.locator('button[aria-label="Настройки"]').click();
+await page.waitForTimeout(500);
+const settingsText = await page.locator(".sheet-panel").last().innerText();
+ok(/вкладка браузера|установлено/.test(settingsText), "видно, установлено приложение или открыто во вкладке");
+ok(/[0-9a-f]{7}|локальная/.test(settingsText), "видно версию сборки",
+  settingsText.match(/.*(?:установлено|вкладка браузера).*/)?.[0] || "");
+await page.getByRole("button", { name: "Закрыть", exact: true }).last().click();
+await page.waitForTimeout(500);
+
 /* «Потяни вниз, чтобы обновить» — андроидный жест, которого на айфоне нет.
    Дёрнуть список посреди тренировки и перезагрузить приложение незачем. */
 ok(await page.evaluate(() => getComputedStyle(document.getElementById("tabpanel")).overscrollBehavior) === "contain",
