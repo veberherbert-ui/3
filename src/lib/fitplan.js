@@ -23,6 +23,31 @@ const MUSCLES_LOST_OK = 1;
 /** Доля выживших упражнений, ниже которой это уже другая программа. */
 const KEEP_MIN = 0.75;
 
+/**
+ * Похожие упражнения — те же, из которых собирается автозамена, только
+ * показанные человеку, чтобы выбрал сам. Сначала то же движение на ту же
+ * мышцу, потом остальное движение, потом просто та же мышца. Доступное
+ * по инвентарю идёт первым: замена на снаряд, которого нет, — не замена.
+ * @returns {{name:string, kind:"move"|"muscle", muscle:string, eq:string, fits:boolean}[]}
+ */
+export function similarTo(name, gear = [], limit = 12) {
+  const info = EXDB[name];
+  if (!info) return [];
+  const seen = new Set([name]);
+  const out = [];
+  const push = (kind) => (n) => {
+    if (seen.has(n) || !EXDB[n]) return;
+    seen.add(n);
+    out.push({ name: n, kind, muscle: EXDB[n].m, eq: EXDB[n].eq, fits: fitsGear(n, gear) });
+  };
+  const move = MOVES[moveOf(name)] || [];
+  move.filter((n) => EXDB[n]?.m === info.m).forEach(push("move"));
+  move.forEach(push("move"));
+  Object.keys(EXDB).filter((n) => EXDB[n].m === info.m).forEach(push("muscle"));
+  /* сортировка устойчивая, поэтому порядок внутри групп сохраняется */
+  return out.sort((a, b) => Number(b.fits) - Number(a.fits)).slice(0, limit);
+}
+
 function replacement(name, gear, taken) {
   const info = EXDB[name];
   if (!info) return null;

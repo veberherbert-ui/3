@@ -485,10 +485,37 @@ await page.waitForTimeout(500);
 /* Числа не зашиваем: база растёт, а проверка должна пережить это. */
 const catalogCount = async () => +((await page.getByPlaceholder(/Поиск среди/).getAttribute("placeholder")).match(/\d+/)?.[0] || 0);
 const allCount = await catalogCount();
-await page.getByRole("button", { name: "Дом: гантели", exact: true }).click();
+await page.getByRole("button", { name: "Дом: только гантели", exact: true }).click();
 await page.waitForTimeout(700);
 const homeCount = await catalogCount();
 ok(homeCount > 0 && homeCount < allCount, "инвентарь сокращает каталог", `${allCount} → ${homeCount}`);
+/* Пол и турник — разный инвентарь. Раньше это была одна галочка «свой вес»,
+   и человеку без перекладины сыпались подтягивания. */
+await page.getByPlaceholder(/Поиск среди/).fill("подтягивания");
+await page.waitForTimeout(500);
+ok(await page.getByText("Ничего не нашлось").isVisible(), "без турника подтягивания не предлагаются");
+await page.getByPlaceholder(/Поиск среди/).fill("");
+await page.waitForTimeout(300);
+await page.getByRole("button", { name: "Дом: гантели и турник", exact: true }).click();
+await page.waitForTimeout(700);
+const barCount = await catalogCount();
+ok(barCount > homeCount, "турник добавляет упражнения обратно", `${homeCount} → ${barCount}`);
+await page.getByPlaceholder(/Поиск среди/).fill("подтягивания");
+await page.waitForTimeout(500);
+ok(!(await page.getByText("Ничего не нашлось").isVisible().catch(() => false)), "с турником — предлагаются");
+await page.getByPlaceholder(/Поиск среди/).fill("");
+await page.waitForTimeout(300);
+/* Только пол: разгибателей спины теперь есть чем нагрузить без турника. */
+await page.getByRole("button", { name: "Только пол", exact: true }).click();
+await page.waitForTimeout(700);
+await page.getByPlaceholder(/Поиск среди/).fill("супермен");
+await page.waitForTimeout(500);
+ok(!(await page.getByText("Ничего не нашлось").isVisible().catch(() => false)),
+  "разгибатели спины есть чем нагрузить на одном полу");
+await page.getByPlaceholder(/Поиск среди/).fill("");
+await page.waitForTimeout(300);
+await page.getByRole("button", { name: "Дом: только гантели", exact: true }).click();
+await page.waitForTimeout(600);
 await page.getByPlaceholder(/Поиск среди/).fill("смит");
 await page.waitForTimeout(500);
 ok(await page.getByText("Ничего не нашлось").isVisible(), "чего нет в инвентаре — не предлагается");
@@ -524,14 +551,59 @@ ok((await dbRead("profile"))?.soundSolo === false, "и переключаетс�
 await page.getByRole("button", { name: "Закрыть", exact: true }).last().click();
 await page.waitForTimeout(400);
 
+section("Сбор тренировки и дни");
+/* Список перед стартом — это и есть тренировка. Галочек больше нет:
+   снятая галочка оставляла строку висеть, и было непонятно, убрал ты
+   упражнение или нет. Крестик убирает строку, «добавить» возвращает. */
+await tab("Сессия");
+const rows = () => page.locator("div.space-y-1\\.5 > div").filter({ has: page.locator("button[aria-label^='Убрать']") });
+const rowsBefore = await rows().count();
+ok(rowsBefore > 0, "день подставил свои упражнения", `${rowsBefore}`);
+await page.locator("button[aria-label^='Убрать']").first().click();
+await page.waitForTimeout(400);
+ok(await rows().count() === rowsBefore - 1, "крестик убирает строку из списка", `${rowsBefore} → ${await rows().count()}`);
+ok(/Начать тренировку \(/.test(await page.getByRole("button", { name: /Начать тренировку/ }).innerText()),
+  "счётчик на кнопке старта остался");
+/* Вернуть убранное — через тот же выбор упражнений, что и везде. */
+await page.getByRole("button", { name: /Добавить упражнение/ }).click();
+await page.waitForTimeout(600);
+ok(await page.getByPlaceholder(/Поиск/).isVisible(), "добавление открывает общий выбор упражнений");
+await page.getByRole("button", { name: "Готово", exact: true }).last().click();
+await page.waitForTimeout(400);
+
+/* Замена на похожее прямо в дне: собрать день из того, что есть, — половина
+   работы, и она не должна упираться в память на названия. */
+await tab("База");
+await page.getByRole("button", { name: /Мои дни/ }).click();
+await page.waitForTimeout(400);
+await page.locator("text=Спина + Задняя дельта").first().click();
+await page.waitForTimeout(500);
+await page.getByRole("button", { name: /Тяга верхнего блока \(V-хват\)/ }).first().click();
+await page.waitForTimeout(600);
+const swapSheet = await page.locator(".sheet-panel").last().innerText();
+ok(/Заменить на похожее/.test(swapSheet), "нажатие по упражнению предлагает замену");
+ok(/то же движение/.test(swapSheet), "видно, чем именно похоже");
+ok(/Подтягивания|Тяга/.test(swapSheet), "среди вариантов то же движение другим снарядом");
+const target = page.locator(".sheet-panel button").filter({ hasText: "Тяга гантели в наклоне одной рукой" }).first();
+await target.click();
+await page.waitForTimeout(700);
+const dayNow = ((await dbRead("days")) || []).find((d) => d.name === "Спина + Задняя дельта");
+ok(!dayNow.exercises.includes("Тяга верхнего блока (V-хват)"), "старое упражнение ушло из дня");
+ok(dayNow.exercises.includes("Тяга гантели в наклоне одной рукой"), "новое встало на его место");
+ok(dayNow.exercises.indexOf("Тяга гантели в наклоне одной рукой") === 1, "и именно на его место, а не в конец",
+  `позиция ${dayNow.exercises.indexOf("Тяга гантели в наклоне одной рукой")}`);
+
 section("Сплиты под инвентарь");
 /* Готовый сплит — это порядок движений, а не список снарядов. С турником
    и полом он должен подставить отжимания вместо жима, а не показать
    список того, чего у человека нет. */
 await tab("База");
+/* инвентарь живёт в каталоге, а прошлый раздел оставил открытыми «мои дни» */
+await page.getByRole("button", { name: /Упражнения/ }).first().click();
+await page.waitForTimeout(400);
 await page.getByRole("button", { name: /Мой инвентарь/i }).first().click();
 await page.waitForTimeout(400);
-await page.getByRole("button", { name: "Турник и пол", exact: true }).click();
+await page.getByRole("button", { name: "Турник, брусья, пол", exact: true }).click();
 await page.waitForTimeout(600);
 await page.getByRole("button", { name: /Мои дни/ }).click();
 await page.waitForTimeout(400);
@@ -543,7 +615,7 @@ ok(/Не для этого инвентаря/.test(sheetText), "негодны�
 /* Подходящее — сверху, негодное — в конце: список читают с начала. */
 const firstCard = (await page.locator(".sheet-panel button").nth(0).innerText());
 ok(!/Не для этого инвентаря/.test(firstCard), "первым идёт подходящий сплит", firstCard.split("\n")[0]);
-ok(/Турник и пол/.test(firstCard), "и он собран как раз под этот инвентарь", firstCard.split("\n")[0]);
+ok(/Турник и пол|Только пол/.test(firstCard), "и он собран как раз под этот инвентарь", firstCard.split("\n")[0]);
 
 /* Применяем сплит, рассчитанный на зал: он должен приехать переписанным
    под турник, а не с недоступными упражнениями. */

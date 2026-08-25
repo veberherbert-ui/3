@@ -25,7 +25,7 @@ import { primeAudio, playRestOver, scheduleRestOver, cancelScheduled, vibrate, t
 import { notifyState, askNotify, scheduleRestNotice, cancelRestNotice } from "./lib/notify.js";
 import { openBack, closeBack } from "./lib/backstack.js";
 import { isIOS, isAndroid } from "./lib/platform.js";
-import { adaptPreset } from "./lib/fitplan.js";
+import { adaptPreset, similarTo } from "./lib/fitplan.js";
 import { useWakeLock } from "./lib/wakelock.js";
 import { buildLabel, installed, checkForUpdate, reloadOnUpdate } from "./lib/update.js";
 import { useAppearance, TEXT_SIZES } from "./lib/appearance.js";
@@ -851,28 +851,39 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
               style={{ background: day?.id === d.id ? C.red : C.surface, color: day?.id === d.id ? C.chalk : C.dim, border: `1px solid ${day?.id === d.id ? C.red : C.line}` }}>{d.name}</button>
           ))}
         </div>
+        {/* Список — это и есть тренировка. Раньше здесь стояли галочки: снятая
+            галочка означала «сегодня не делаю», но строка оставалась висеть,
+            и было непонятно, убрал ты упражнение или нет. Теперь крестик
+            убирает строку, а вернуть её можно через «добавить». */}
         <div className="space-y-1.5 mt-3">
-          {[...new Set([...(day?.exercises || []), ...picked])].map((n) => {
-            const on = picked.includes(n); const prev = lastFor(n);
+          {!picked.length && (
+            <div className="f-body text-sm text-center py-6" style={{ color: C.dim }}>
+              Пусто. Добавь упражнения ниже или выбери другой день.
+            </div>
+          )}
+          {picked.map((n) => {
+            const prev = lastFor(n);
             const up = prev && readyToAdd(prev.ex);
             return (
-              <div key={n} className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ background: C.surface, border: `1px solid ${on ? C.moss : C.line}` }}>
-                <button onClick={() => toggle(n)} aria-label={`${n}: ${on ? "убрать из тренировки" : "добавить в тренировку"}`} aria-pressed={on} className="shrink-0 flex items-center justify-center">
-                  <span className="w-6 h-6 rounded flex items-center justify-center" style={{ background: on ? C.moss : "transparent", border: `1px solid ${on ? C.moss : C.line}` }}>
-                    {on && <Check size={16} color={C.chalk} />}
-                  </span>
-                </button>
-                <button onClick={() => toggle(n)} className="flex-1 text-left min-w-0">
-                  <div className="f-body text-sm" style={{ color: on ? C.chalk : C.dim }}>{n}{isUni(n) && <UniTag />}<RiskMark name={n} conditions={conditions} /></div>
+              <div key={n} className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+                <button onClick={() => setInfo(n)} className="flex-1 text-left min-w-0">
+                  <div className="f-body text-sm" style={{ color: C.chalk }}>{n}{isUni(n) && <UniTag />}<RiskMark name={n} conditions={conditions} /></div>
                   {prev && <div className="f-num text-2xs truncate" style={{ color: C.dim }}>{fmtDate(prev.date)}: {setsLine(prev.ex)}</div>}
                   {up && <div className="f-body text-2xs" style={{ color: C.mustard }}>{isBW(n) ? "выбил верх диапазона — пробуй с утяжелением" : "выбил верх диапазона — пробуй +2.5 кг"}</div>}
                 </button>
                 <button onClick={() => setInfo(n)} aria-label={`Об упражнении «${n}»`} className="shrink-0 flex items-center justify-center"><Info size={18} color={C.dim} /></button>
+                <button onClick={() => toggle(n)} aria-label={`Убрать «${n}» из тренировки`}
+                  className="shrink-0 flex items-center justify-center" style={{ width: 32, minHeight: 44 }}>
+                  <X size={18} color={C.dim} />
+                </button>
               </div>
             );
           })}
         </div>
-        <div className="flex gap-2 mt-3">
+        <button onClick={() => setAdding(true)} className="f-body w-full mt-3 rounded-xl py-3 text-sm flex items-center justify-center gap-2" style={{ background: C.surface, color: C.mossText, border: `1px solid ${C.line}` }}>
+          <Plus size={15} /> Добавить упражнение
+        </button>
+        <div className="flex gap-2 mt-2">
           <input value={custom} onChange={(e) => setCustom(e.target.value)} placeholder="Разовое упражнение…" aria-label="Название разового упражнения" className="f-body flex-1 rounded-lg px-3 py-2 text-sm min-w-0" style={{ background: C.surface, color: C.chalk, border: `1px solid ${C.line}` }} />
           <button onClick={() => { if (custom.trim()) { setPicked((p) => [...p, custom.trim()]); setCustom(""); } }} aria-label="Добавить разовое упражнение" className="rounded-lg px-3 flex items-center justify-center" style={{ background: C.surface, border: `1px solid ${C.line}`, color: C.chalk }}><Plus size={18} /></button>
         </div>
@@ -888,6 +899,16 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
             <RotateCcw size={15} color={C.dim} />
             Повторить прошлую ({fmtDate(lastWorkoutOfDay.date)}, {lastWorkoutOfDay.exercises.length} упр.)
           </button>
+        )}
+        {adding && (
+          <ExercisePicker
+            title="Добавить в тренировку"
+            conditions={conditions}
+            gear={gear}
+            has={(n) => picked.includes(n)}
+            onPick={(n) => setPicked((p) => (p.includes(n) ? p : [...p, n]))}
+            onClose={() => setAdding(false)}
+          />
         )}
         {info && <ExerciseInfo name={info} onClose={() => setInfo(null)} conditions={conditions} gear={gear} />}
       </div>
@@ -1420,6 +1441,8 @@ function Catalog({ days, onAddToDay, conditions, gear, setGear }) {
 function DaysEditor({ days, setDays, conditions, gear }) {
   const [open, setOpen] = useState(null);
   const [pickFor, setPickFor] = useState(null);
+  /* Какое упражнение меняем: {день, название}. */
+  const [swapFor, setSwapFor] = useState(null);
   const [presets, setPresets] = useState(false);
 
   const rename = (id, name) => setDays(days.map((d) => (d.id === id ? { ...d, name } : d)));
@@ -1432,6 +1455,10 @@ function DaysEditor({ days, setDays, conditions, gear }) {
     return { ...d, exercises: arr };
   }));
   const addEx = (id, n) => setDays(days.map((d) => (d.id === id && !d.exercises.includes(n) ? { ...d, exercises: [...d.exercises, n] } : d)));
+  /* Замена встаёт на место старого упражнения, а не в конец: порядок в дне
+     осмысленный — тяжёлое базовое впереди, добивка после. */
+  const swapEx = (id, from, to) => setDays(days.map((d) => (d.id !== id ? d
+    : { ...d, exercises: d.exercises.includes(to) ? d.exercises.filter((x) => x !== from) : d.exercises.map((x) => (x === from ? to : x)) })));
   const delDay = (id) => setDays(days.filter((d) => d.id !== id));
   const newDay = () => { const id = uid(); setDays([...days, { id, name: "Новый день", exercises: [] }]); setOpen(id); };
   /* Сплит добавляем уже подогнанным под инвентарь: смысл в порядке движений,
@@ -1482,10 +1509,14 @@ function DaysEditor({ days, setDays, conditions, gear }) {
                   <div className="space-y-1">
                     {d.exercises.map((n, i) => (
                       <div key={n} className="flex items-center gap-1 rounded-lg pl-2.5 py-1" style={{ background: C.surfaceHi }}>
-                        <div className="flex-1 min-w-0 py-1">
+                        {/* Нажатие по названию предлагает замену на похожее:
+                            собрать день из того, что есть, — половина работы,
+                            и ради неё не должно приходиться помнить, каким
+                            движением заменяется тяга блока. */}
+                        <button onClick={() => setSwapFor({ day: d.id, name: n })} className="flex-1 min-w-0 py-1 text-left">
                           <div className="f-body text-xs" style={{ color: C.chalk }}>{n}{isUni(n) && <UniTag />}<RiskMark name={n} conditions={conditions} /></div>
-                          {EXDB[n] && <div className="f-body text-2xs" style={{ color: C.dim }}>{EXDB[n].m}</div>}
-                        </div>
+                          {EXDB[n] && <div className="f-body text-2xs" style={{ color: C.dim }}>{EXDB[n].m} · {EXDB[n].eq}</div>}
+                        </button>
                         {/* стрелки в ряд, а не стопкой: стопка из двух целей по 44px
                             растянула бы строку вдвое */}
                         <button onClick={() => move(d.id, i, -1)} disabled={i === 0}
@@ -1512,6 +1543,38 @@ function DaysEditor({ days, setDays, conditions, gear }) {
           );
         })}
       </div>
+
+      {/* Замена на похожее. Список тот же, из которого приложение собирает
+          автозамену под инвентарь, — только выбирает человек. Недоступное
+          по инвентарю не прячем: оно внизу и притушено, потому что «у меня
+          этого нет» и «этого не бывает» — разные вещи. */}
+      {swapFor && (() => {
+        const list = similarTo(swapFor.name, gear, 14);
+        return (
+          <Sheet onClose={() => setSwapFor(null)}>
+            <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>Заменить на похожее</div>
+            <div className="f-body text-xs mb-3" style={{ color: C.dim }}>
+              Вместо «{swapFor.name}»{EXDB[swapFor.name] ? ` · ${EXDB[swapFor.name].m}` : ""}
+            </div>
+            {!list.length && <div className="f-body text-sm py-4" style={{ color: C.dim }}>Похожего в базе нет.</div>}
+            <div className="space-y-1.5">
+              {list.map((x) => (
+                <button key={x.name} onClick={() => { swapEx(swapFor.day, swapFor.name, x.name); setSwapFor(null); }}
+                  className="w-full text-left rounded-xl px-3 py-2.5"
+                  style={{ background: C.surfaceHi, border: `1px solid ${x.fits ? C.line : "transparent"}`, opacity: x.fits ? 1 : 0.5 }}>
+                  <div className="f-body text-sm" style={{ color: C.chalk }}>{x.name}{isUni(x.name) && <UniTag />}<RiskMark name={x.name} conditions={conditions} /></div>
+                  <div className="f-body text-2xs" style={{ color: C.dim }}>
+                    {x.muscle} · {x.eq}
+                    {x.kind === "move" ? " · то же движение" : " · та же мышца"}
+                    {!x.fits && " · нет в инвентаре"}
+                  </div>
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setSwapFor(null)} className="f-body w-full mt-3 py-3 text-sm" style={{ color: C.dim }}>Закрыть</button>
+          </Sheet>
+        );
+      })()}
 
       {pickFor && (
         <ExercisePicker
