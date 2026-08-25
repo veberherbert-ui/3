@@ -81,6 +81,20 @@ const tab = async (name) => {
   await page.waitForTimeout(500);
 };
 
+/* «Дневник» — одна вкладка с двумя видами: записи и итоги. */
+const diary = async (view) => {
+  await tab("Дневник");
+  await page.getByRole("button", { name: view, exact: true }).first().click();
+  await page.waitForTimeout(500);
+};
+
+/* «План» — «Мои дни» открыты по умолчанию, каталог вторым видом. */
+const plan = async (view) => {
+  await tab("План");
+  await page.getByRole("button", { name: view, exact: true }).first().click();
+  await page.waitForTimeout(500);
+};
+
 /* Считаем запуски медиаэлементов. На iPhone именно проигрываемый <audio>
    переводит страницу в режим проигрывателя — и ставит на паузу музыку в
    наушниках. Приложение однажды делало это на каждое нажатие «начать». */
@@ -112,12 +126,32 @@ ok(await visible(page.getByText("Пара чисел о вас")), "после �
 await page.getByRole("spinbutton", { name: "Рост, см" }).fill("180");
 await page.getByRole("spinbutton", { name: "Вес, кг" }).fill("82");
 await page.getByRole("spinbutton", { name: "Возраст, лет" }).fill("35");
-await page.getByRole("button", { name: /Сохранить и начать/ }).click();
-await page.waitForTimeout(800);
+/* Знакомство — четыре шага подряд: кто я → что болит → чем располагаю →
+   что буду делать. Раньше спрашивали только рост с весом, а дальше человека
+   высаживали в приложение с чужой программой и предлагали разбираться. */
+await page.getByRole("button", { name: /^Дальше/ }).click();
+await page.waitForTimeout(600);
+ok(await visible(page.getByText("Что бережём")), "второй шаг — травмы и ограничения");
+await page.getByRole("button", { name: /Плечо/ }).first().click();
+await page.waitForTimeout(300);
+await page.getByRole("button", { name: /Дальше \(1\)/ }).click();
+await page.waitForTimeout(600);
+ok(await visible(page.getByText("Чем занимаешься")), "третий шаг — инвентарь");
+await page.getByRole("button", { name: /Полный зал/ }).first().click();
+await page.waitForTimeout(600);
+ok(await visible(page.getByText("С чего начнём")), "четвёртый шаг — программа");
+const offered = await page.locator("h1").locator("..").innerText();
+ok(/Собрать свою/.test(offered) && /Просто записывать/.test(offered),
+  "предложены и готовая программа, и свой день, и запись без плана");
+await page.getByRole("button", { name: /4 дня: грудь\+бицепс/ }).first().click();
+await page.waitForTimeout(900);
 ok(!(await page.getByText("Пара чисел о вас").isVisible().catch(() => false)), "знакомство показывается один раз");
 ok((await dbRead("profile"))?.height === "180", "рост сохранён в профиль");
 ok(+(await dbRead("metrics"))?.[0]?.weight === 82, "вес лёг первым замером");
-for (const t of ["Сессия", "Журнал", "Графики", "База", "Тело"]) {
+ok(JSON.stringify((await dbRead("profile"))?.conditions) === '["shoulder"]', "травмы сохранены с первого шага");
+ok(((await dbRead("days")) || []).length === 4, "выбранная программа стала днями",
+  `${((await dbRead("days")) || []).length} дней`);
+for (const t of ["Тренировка", "План", "Дневник", "Тело"]) {
   await tab(t);
   const el = page.getByRole("tab", { name: t, exact: true });
   ok(await el.isVisible(), `вкладка «${t}» открывается`);
@@ -127,7 +161,7 @@ ok(await page.locator('[role="tablist"]').isVisible(), "панель вклад�
 ok(await page.locator('[role="tabpanel"]').isVisible(), "содержимое объявлено как панель вкладки");
 
 section("Тренировка");
-await tab("Сессия");
+await tab("Тренировка");
 await page.getByRole("button", { name: /Начать тренировку/ }).click();
 await page.waitForTimeout(700);
 ok(await visible(page.getByRole("button", { name: /Завершить и сохранить/ })), "сессия стартовала (порядок хуков цел)");
@@ -276,7 +310,7 @@ ok(edited?.[0]?.id === saved?.[0]?.id, "запись та же, не созда�
 
 section("Мелочи");
 /* необратимые действия должны спрашивать подтверждение */
-await tab("Журнал");
+await diary("Записи");
 /* карточка могла остаться раскрытой после правки — разворачиваем только если закрыта */
 if (!(await page.getByRole("button", { name: /Изменить/ }).isVisible().catch(() => false))) {
   await page.locator("text=Грудь + Бицепс").first().click();
@@ -294,7 +328,7 @@ const journalText = await page.locator("body").innerText();
 ok(!/claude/i.test(journalText), "в журнале нет упоминаний Claude");
 
 /* повтор прошлой тренировки и добавление упражнения на ходу */
-await tab("Сессия");
+await tab("Тренировка");
 ok(await page.getByRole("button", { name: /Повторить прошлую/ }).isVisible(), "есть кнопка повтора прошлой тренировки");
 await page.getByRole("button", { name: /Повторить прошлую/ }).click();
 await page.waitForTimeout(800);
@@ -360,7 +394,7 @@ await page.getByRole("button", { name: "Да", exact: true }).click();
 await page.waitForTimeout(800);
 
 section("Запись задним числом");
-await tab("Журнал");
+await diary("Записи");
 await page.getByRole("button", { name: /Записать прошлую тренировку/ }).click();
 await page.waitForTimeout(600);
 ok(await page.getByText("Какой это был день?").isVisible(), "спрашивает, что это был за день");
@@ -403,7 +437,9 @@ ok(bwText.includes("+ 10 кг"), "видно утяжеление");
 ok(bwText.includes("8+10"), "подход записан как повторения плюс утяжеление");
 
 section("Расход за тренировку");
-await tab("Тело");
+/* Расход переехал из «Тела» в «Дневник → Итоги»: это разбор конкретной
+   записи, а не свойство человека. */
+await diary("Итоги");
 const picker = page.getByRole("combobox", { name: "Тренировка для расчёта расхода" });
 await picker.scrollIntoViewIfNeeded();
 ok(await picker.isVisible(), "расход считается по выбранной тренировке из журнала");
@@ -430,7 +466,7 @@ await page.waitForTimeout(500);
 ok((await energyCard.innerText()) !== first, "выбор другой тренировки пересчитывает расход");
 
 section("Графики");
-await tab("Графики");
+await diary("Итоги");
 await page.waitForTimeout(700);
 const prog = await page.locator('[role="tabpanel"]').innerText();
 /* Вкладка отвечает на вопросы сама, а не просит выбрать одно упражнение
@@ -450,14 +486,19 @@ await page.waitForTimeout(900);
 ok(await page.locator("svg.recharts-surface").first().isVisible().catch(() => false), "нажатие раскрывает график упражнения");
 
 section("Травмы и замены");
-await tab("Тело");
+/* Травмы переехали из «Тела» в «План», к инвентарю: и то и другое —
+   фильтры подбора упражнений, а не свойства тела. */
+await tab("План");
 await page.getByText("Травмы и ограничения").click();
+await page.waitForTimeout(400);
+/* плечо уже отмечено на знакомстве — снимем и поставим заново */
+await page.getByText("импиджмент, боль при подъёме руки").click();
 await page.waitForTimeout(400);
 await page.getByText("импиджмент, боль при подъёме руки").click();
 await page.waitForTimeout(600);
 ok(await page.getByText(/Убираются жимы над головой/).isVisible(), "состояние выбралось, показана сводка");
 
-await tab("База");
+await plan("Упражнения");
 await page.getByPlaceholder(/Поиск среди/).fill("жим гантелей сидя");
 await page.waitForTimeout(600);
 await page.getByText("Жим гантелей сидя", { exact: false }).first().click();
@@ -479,7 +520,7 @@ await page.getByRole("button", { name: "Закрыть" }).click();
 await page.waitForTimeout(400);
 
 section("Инвентарь");
-await tab("База");
+await plan("Упражнения");
 await page.getByRole("button", { name: /Мой инвентарь/ }).click();
 await page.waitForTimeout(500);
 /* Числа не зашиваем: база растёт, а проверка должна пережить это. */
@@ -555,7 +596,7 @@ section("Сбор тренировки и дни");
 /* Список перед стартом — это и есть тренировка. Галочек больше нет:
    снятая галочка оставляла строку висеть, и было непонятно, убрал ты
    упражнение или нет. Крестик убирает строку, «добавить» возвращает. */
-await tab("Сессия");
+await tab("Тренировка");
 const rows = () => page.locator("div.space-y-1\\.5 > div").filter({ has: page.locator("button[aria-label^='Убрать']") });
 const rowsBefore = await rows().count();
 ok(rowsBefore > 0, "день подставил свои упражнения", `${rowsBefore}`);
@@ -573,9 +614,7 @@ await page.waitForTimeout(400);
 
 /* Замена на похожее прямо в дне: собрать день из того, что есть, — половина
    работы, и она не должна упираться в память на названия. */
-await tab("База");
-await page.getByRole("button", { name: /Мои дни/ }).click();
-await page.waitForTimeout(400);
+await tab("План");
 await page.locator("text=Спина + Задняя дельта").first().click();
 await page.waitForTimeout(500);
 await page.getByRole("button", { name: /Тяга верхнего блока \(V-хват\)/ }).first().click();
@@ -597,16 +636,12 @@ section("Сплиты под инвентарь");
 /* Готовый сплит — это порядок движений, а не список снарядов. С турником
    и полом он должен подставить отжимания вместо жима, а не показать
    список того, чего у человека нет. */
-await tab("База");
-/* инвентарь живёт в каталоге, а прошлый раздел оставил открытыми «мои дни» */
-await page.getByRole("button", { name: /Упражнения/ }).first().click();
-await page.waitForTimeout(400);
+/* инвентарь теперь лежит прямо в «Плане», рядом с днями */
+await tab("План");
 await page.getByRole("button", { name: /Мой инвентарь/i }).first().click();
 await page.waitForTimeout(400);
 await page.getByRole("button", { name: "Турник, брусья, пол", exact: true }).click();
 await page.waitForTimeout(600);
-await page.getByRole("button", { name: /Мои дни/ }).click();
-await page.waitForTimeout(400);
 await page.getByRole("button", { name: /Готовый сплит/ }).click();
 await page.waitForTimeout(700);
 const sheetText = await page.locator(".sheet-panel").innerText();
@@ -663,9 +698,9 @@ await page.reload({ waitUntil: "domcontentloaded" });
 await page.waitForTimeout(2500);
 ok(await page.getByText("Железный дневник").isVisible().catch(() => false), "открывается без сети");
 ok(await page.evaluate(async () => { await document.fonts.ready; return document.fonts.check("600 16px Oswald"); }), "шрифты локальные");
-await tab("Журнал");
+await diary("Записи");
 ok(await page.getByText("всего тренировок").isVisible(), "журнал доступен офлайн");
-await tab("Сессия");
+await tab("Тренировка");
 await page.getByRole("button", { name: /Начать тренировку/ }).click();
 await page.waitForTimeout(600);
 await page.getByPlaceholder("повт").first().fill("8");
@@ -771,7 +806,7 @@ await page.waitForTimeout(500);
 
 /* Ничего не должно вылезать за правый край: на андроиде экраны бывают
    уже айфоновских, и горизонтальная прокрутка ломает всё разом. */
-for (const name of ["Сессия", "Журнал", "Графики", "База", "Тело"]) {
+for (const name of ["Тренировка", "План", "Дневник", "Тело"]) {
   await tab(name);
   const over = await page.evaluate(() => {
     const el = document.getElementById("tabpanel");

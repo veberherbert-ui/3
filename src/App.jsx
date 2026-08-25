@@ -25,7 +25,7 @@ import { primeAudio, playRestOver, scheduleRestOver, cancelScheduled, vibrate, t
 import { notifyState, askNotify, scheduleRestNotice, cancelRestNotice } from "./lib/notify.js";
 import { openBack, closeBack } from "./lib/backstack.js";
 import { isIOS, isAndroid } from "./lib/platform.js";
-import { adaptPreset, similarTo } from "./lib/fitplan.js";
+import { adaptPreset, similarTo, byFit } from "./lib/fitplan.js";
 import { useWakeLock } from "./lib/wakelock.js";
 import { buildLabel, installed, checkForUpdate, reloadOnUpdate } from "./lib/update.js";
 import { useAppearance, TEXT_SIZES } from "./lib/appearance.js";
@@ -83,9 +83,6 @@ const plural = (n, one, few, many) => {
   if (b > 1 && b < 5) return few;
   return b === 1 ? one : many;
 };
-
-/** Порядок в списке сплитов: сперва подходящие, в конце — неподходящие. */
-const ORDER = { native: 0, adapted: 1, poor: 2 };
 
 /** Ручка перетаскивания: видимая и достаточно крупная, чтобы попасть пальцем. */
 const Grip = (props) => (
@@ -775,6 +772,38 @@ function RestBar({ rest, onDone, onAdjust, onSkip, muted, compact }) {
   );
 }
 
+/** Лист «заменить на похожее». Список тот же, из которого приложение
+    собирает автозамену под инвентарь, — только выбирает человек. Доступное
+    сверху, недоступное внизу и притушено: «у меня этого нет» и «этого
+    не бывает» — разные вещи. */
+function SwapSheet({ name, gear, conditions, onPick, onClose }) {
+  const list = useMemo(() => similarTo(name, gear, 14), [name, gear]);
+  return (
+    <Sheet onClose={onClose}>
+      <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>Заменить на похожее</div>
+      <div className="f-body text-xs mb-3" style={{ color: C.dim }}>
+        Вместо «{name}»{EXDB[name] ? ` · ${EXDB[name].m}` : ""}
+      </div>
+      {!list.length && <div className="f-body text-sm py-4" style={{ color: C.dim }}>Похожего в базе нет.</div>}
+      <div className="space-y-1.5">
+        {list.map((x) => (
+          <button key={x.name} onClick={() => onPick(x.name)}
+            className="w-full text-left rounded-xl px-3 py-2.5"
+            style={{ background: C.surfaceHi, border: `1px solid ${x.fits ? C.line : "transparent"}`, opacity: x.fits ? 1 : 0.5 }}>
+            <div className="f-body text-sm" style={{ color: C.chalk }}>{x.name}{isUni(x.name) && <UniTag />}<RiskMark name={x.name} conditions={conditions} /></div>
+            <div className="f-body text-2xs" style={{ color: C.dim }}>
+              {x.muscle} · {x.eq}
+              {x.kind === "move" ? " · то же движение" : " · та же мышца"}
+              {!x.fits && " · нет в инвентаре"}
+            </div>
+          </button>
+        ))}
+      </div>
+      <button onClick={onClose} className="f-body w-full mt-3 py-3 text-sm" style={{ color: C.dim }}>Закрыть</button>
+    </Sheet>
+  );
+}
+
 function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, conditions, restOverrides, setRestOverride, muted, bodyAt, gear }) {
   const [pickDay, setPickDay] = useState(days[0]?.id);
   const [picked, setPicked] = useState([]);
@@ -790,6 +819,8 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
   const fieldRefs = useRef({});
   const { ref: topMark, stuck: stuckTop } = useStuck();
   const [blanksWarn, setBlanksWarn] = useState(false);
+  /* Какое упражнение меняем перед стартом. */
+  const [swapName, setSwapName] = useState(null);
 
   const day = days.find((d) => d.id === pickDay) || days[0];
   useEffect(() => { if (day) setPicked(day.exercises); }, [pickDay, days.length]); // eslint-disable-line
@@ -828,17 +859,61 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
   }, [workouts, day]);
 
   if (!session) {
-    if (!days.length) return <div className="px-4 py-16 text-center f-body text-sm" style={{ color: C.dim }}>Нет ни одного дня. Создай его во вкладке «База».</div>;
     const toggle = (n) => setPicked((p) => (p.includes(n) ? p.filter((x) => x !== n) : [...p, n]));
     const start = (names = picked) => {
       if (!names.length) return;
       primeAudio(); /* касание пользователя — момент, когда iOS разрешает звук */
       setSession({
-        id: uid(), date: today(), dayId: day.id, dayLabel: day.name,
+        id: uid(), date: today(), dayId: day?.id || null, dayLabel: day?.name || "Без плана",
         startedAt: Date.now(), resumedAt: Date.now(), accumMs: 0, paused: false, note: "",
         exercises: names.map(blankExercise),
       });
     };
+
+    /* Ни одного дня — это не тупик и не ошибка. Раньше здесь стояла строка
+       «Создай его во вкладке База»: текст, отсылающий в другую вкладку
+       вместо кнопки, которая сделает это прямо здесь. И плана может не быть
+       вовсе — человек пришёл в зал и просто записывает, что делает. */
+    if (!days.length) return (
+      <div className="px-4 pt-10 pb-8">
+        <div className="f-display text-xl font-bold mb-2" style={{ color: C.chalk }}>Плана пока нет</div>
+        <div className="f-body text-sm mb-6" style={{ color: C.dim }}>
+          Можно собрать программу — или просто записать сегодняшнюю тренировку
+          и заняться планом потом.
+        </div>
+        <button onClick={goToDays} className="f-display w-full rounded-xl py-3.5 text-base font-semibold flex items-center justify-center gap-2" style={{ background: C.red, color: C.chalk }}>
+          <Layers size={17} /> Собрать программу
+        </button>
+        <button onClick={() => setAdding(true)} className="f-body w-full mt-2 rounded-xl py-3 text-sm flex items-center justify-center gap-2" style={{ background: C.surface, color: C.chalk, border: `1px solid ${C.line}` }}>
+          <Plus size={15} /> Просто записать тренировку
+        </button>
+        {!!picked.length && (
+          <>
+            <div className="space-y-1.5 mt-4">
+              {picked.map((n) => (
+                <div key={n} className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+                  <span className="f-body text-sm flex-1 min-w-0" style={{ color: C.chalk }}>{n}</span>
+                  <button onClick={() => toggle(n)} aria-label={`Убрать «${n}» из тренировки`} className="shrink-0 flex items-center justify-center" style={{ width: 32, minHeight: 44 }}><X size={18} color={C.dim} /></button>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => start()} className="f-display w-full mt-3 rounded-xl py-3.5 text-base font-semibold flex items-center justify-center gap-2" style={{ background: C.red, color: C.chalk }}>
+              <Play size={18} /> Начать тренировку ({picked.length})
+            </button>
+          </>
+        )}
+        {adding && (
+          <ExercisePicker
+            title="Что делаешь сегодня"
+            conditions={conditions}
+            gear={gear}
+            has={(n) => picked.includes(n)}
+            onPick={(n) => setPicked((p) => (p.includes(n) ? p : [...p, n]))}
+            onClose={() => setAdding(false)}
+          />
+        )}
+      </div>
+    );
     return (
       <div className="px-4 pt-4 pb-8">
         <div className="flex items-center justify-between mb-2">
@@ -866,7 +941,9 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
             const up = prev && readyToAdd(prev.ex);
             return (
               <div key={n} className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
-                <button onClick={() => setInfo(n)} className="flex-1 text-left min-w-0">
+                {/* Нажатие по названию предлагает замену — то же, что и
+                    в конструкторе дня. Карточка упражнения осталась за «i». */}
+                <button onClick={() => setSwapName(n)} className="flex-1 text-left min-w-0">
                   <div className="f-body text-sm" style={{ color: C.chalk }}>{n}{isUni(n) && <UniTag />}<RiskMark name={n} conditions={conditions} /></div>
                   {prev && <div className="f-num text-2xs truncate" style={{ color: C.dim }}>{fmtDate(prev.date)}: {setsLine(prev.ex)}</div>}
                   {up && <div className="f-body text-2xs" style={{ color: C.mustard }}>{isBW(n) ? "выбил верх диапазона — пробуй с утяжелением" : "выбил верх диапазона — пробуй +2.5 кг"}</div>}
@@ -899,6 +976,13 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
             <RotateCcw size={15} color={C.dim} />
             Повторить прошлую ({fmtDate(lastWorkoutOfDay.date)}, {lastWorkoutOfDay.exercises.length} упр.)
           </button>
+        )}
+        {swapName && (
+          <SwapSheet
+            name={swapName} gear={gear} conditions={conditions}
+            onClose={() => setSwapName(null)}
+            onPick={(to) => { setPicked((p) => (p.includes(to) ? p.filter((x) => x !== swapName) : p.map((x) => (x === swapName ? to : x)))); setSwapName(null); }}
+          />
         )}
         {adding && (
           <ExercisePicker
@@ -1460,16 +1544,22 @@ function DaysEditor({ days, setDays, conditions, gear }) {
   const swapEx = (id, from, to) => setDays(days.map((d) => (d.id !== id ? d
     : { ...d, exercises: d.exercises.includes(to) ? d.exercises.filter((x) => x !== from) : d.exercises.map((x) => (x === from ? to : x)) })));
   const delDay = (id) => setDays(days.filter((d) => d.id !== id));
-  const newDay = () => { const id = uid(); setDays([...days, { id, name: "Новый день", exercises: [] }]); setOpen(id); };
+  /* Создать день и сразу предложить наполнить его: пустой день никому
+     не нужен сам по себе, а лишнее нажатие «добавить упражнение» после
+     «новый день» — чистая формальность. */
+  const newDay = () => {
+    const id = uid();
+    setDays([...days, { id, name: "Новый день", exercises: [] }]);
+    setOpen(id);
+    setPickFor(id);
+  };
   /* Сплит добавляем уже подогнанным под инвентарь: смысл в порядке движений,
      а каким снарядом их делать — вопрос второй. Что заменилось, видно
      на карточке до нажатия. */
   const fitted = useMemo(
     () => Object.entries(PRESETS)
       .map(([k, p]) => ({ k, p, fit: adaptPreset(p, gear) }))
-      /* Сначала то, что подходит как есть, потом требующее замен,
-         в конце — то, что этим инвентарём просто не собрать. */
-      .sort((a, b) => ORDER[a.fit.verdict] - ORDER[b.fit.verdict] || a.fit.swaps - b.fit.swaps),
+      .sort(byFit),
     [gear],
   );
   const applyPreset = (key) => {
@@ -1548,33 +1638,13 @@ function DaysEditor({ days, setDays, conditions, gear }) {
           автозамену под инвентарь, — только выбирает человек. Недоступное
           по инвентарю не прячем: оно внизу и притушено, потому что «у меня
           этого нет» и «этого не бывает» — разные вещи. */}
-      {swapFor && (() => {
-        const list = similarTo(swapFor.name, gear, 14);
-        return (
-          <Sheet onClose={() => setSwapFor(null)}>
-            <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>Заменить на похожее</div>
-            <div className="f-body text-xs mb-3" style={{ color: C.dim }}>
-              Вместо «{swapFor.name}»{EXDB[swapFor.name] ? ` · ${EXDB[swapFor.name].m}` : ""}
-            </div>
-            {!list.length && <div className="f-body text-sm py-4" style={{ color: C.dim }}>Похожего в базе нет.</div>}
-            <div className="space-y-1.5">
-              {list.map((x) => (
-                <button key={x.name} onClick={() => { swapEx(swapFor.day, swapFor.name, x.name); setSwapFor(null); }}
-                  className="w-full text-left rounded-xl px-3 py-2.5"
-                  style={{ background: C.surfaceHi, border: `1px solid ${x.fits ? C.line : "transparent"}`, opacity: x.fits ? 1 : 0.5 }}>
-                  <div className="f-body text-sm" style={{ color: C.chalk }}>{x.name}{isUni(x.name) && <UniTag />}<RiskMark name={x.name} conditions={conditions} /></div>
-                  <div className="f-body text-2xs" style={{ color: C.dim }}>
-                    {x.muscle} · {x.eq}
-                    {x.kind === "move" ? " · то же движение" : " · та же мышца"}
-                    {!x.fits && " · нет в инвентаре"}
-                  </div>
-                </button>
-              ))}
-            </div>
-            <button onClick={() => setSwapFor(null)} className="f-body w-full mt-3 py-3 text-sm" style={{ color: C.dim }}>Закрыть</button>
-          </Sheet>
-        );
-      })()}
+      {swapFor && (
+        <SwapSheet
+          name={swapFor.name} gear={gear} conditions={conditions}
+          onClose={() => setSwapFor(null)}
+          onPick={(to) => { swapEx(swapFor.day, swapFor.name, to); setSwapFor(null); }}
+        />
+      )}
 
       {pickFor && (
         <ExercisePicker
@@ -1627,18 +1697,34 @@ function DaysEditor({ days, setDays, conditions, gear }) {
   );
 }
 
-function BaseTab({ days, setDays, initialView, conditions, gear, setGear }) {
-  const [view, setView] = useState(initialView || "catalog");
+/* «План»: что я буду делать и с чем. Раньше называлось «База» и открывалось
+   на каталоге упражнений — то есть на энциклопедии, а своя программа была
+   спрятана за ещё одно нажатие. Теперь наоборот: первым идёт то, ради чего
+   сюда заходят каждую неделю. */
+function BaseTab({ days, setDays, initialView, conditions, gear, setGear, profile, setProfile }) {
+  const [view, setView] = useState(initialView || "days");
   useEffect(() => { if (initialView) setView(initialView); }, [initialView]);
   const addToDay = (id, n) => setDays(days.map((d) => (d.id === id && !d.exercises.includes(n) ? { ...d, exercises: [...d.exercises, n] } : d)));
   return (
     <div className="px-4 pt-4 pb-8">
       <div className="flex rounded-lg overflow-hidden mb-3" style={{ border: `1px solid ${C.line}` }}>
-        {[["catalog", "Упражнения"], ["days", "Мои дни"]].map(([id, l]) => (
+        {[["days", "Мои дни"], ["catalog", "Упражнения"]].map(([id, l]) => (
           <button key={id} onClick={() => setView(id)} className="f-body flex-1 text-xs py-2" style={{ background: view === id ? C.red : C.surface, color: view === id ? C.chalk : C.dim }}>{l}</button>
         ))}
       </div>
-      {view === "catalog" ? <Catalog days={days} onAddToDay={addToDay} conditions={conditions} gear={gear} setGear={setGear} /> : <DaysEditor days={days} setDays={setDays} conditions={conditions} gear={gear} />}
+      {view === "catalog"
+        ? <Catalog days={days} onAddToDay={addToDay} conditions={conditions} gear={gear} setGear={setGear} />
+        : (
+          <>
+            <DaysEditor days={days} setDays={setDays} conditions={conditions} gear={gear} />
+            {/* Инвентарь и травмы — два фильтра подбора, и живут они здесь,
+                рядом с программой, а не в «Теле» и не в каталоге. */}
+            <div className="mt-3 space-y-3">
+              <GearCard gear={gear} setGear={setGear} />
+              <ConditionsCard profile={profile} setProfile={setProfile} />
+            </div>
+          </>
+        )}
     </div>
   );
 }
@@ -2456,6 +2542,103 @@ function ConditionsCard({ profile, setProfile }) {
   );
 }
 
+
+/** Расход за конкретную тренировку. Живёт в дневнике, а не в «Теле»:
+    это разбор записи, а не свойство человека. */
+function WorkoutEnergyCard({ workouts, metrics, bmr, restOverrides }) {
+  const [energyId, setEnergyId] = useState(null);
+  const recent = useMemo(() => [...workouts].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 30), [workouts]);
+  const picked = recent.find((w) => w.id === energyId) || recent[0] || null;
+  const energy = useMemo(
+    () => workoutEnergy(picked, { metrics, bmr, restOverrides }),
+    [picked, metrics, bmr, restOverrides],
+  );
+  const met = energy ? energy.level.met.toFixed(1).replace(".", ",") : "";
+  const inp = { background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` };
+
+  return (
+    <div className="rounded-xl p-3.5 mt-3" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+      <div className="f-display text-sm font-semibold mb-2 flex items-center gap-2" style={{ color: C.chalk }}><Flame size={15} /> Расход за тренировку</div>
+      {!recent.length ? (
+        <div className="f-body text-xs" style={{ color: C.dim }}>Пока нечего считать: расход берётся из записи в журнале.</div>
+      ) : (<>
+        <select value={picked?.id || ""} onChange={(e) => setEnergyId(e.target.value)} aria-label="Тренировка для расчёта расхода"
+          className="f-body w-full rounded-lg px-3 py-2.5 text-sm" style={inp}>
+          {recent.map((w) => (
+            <option key={w.id} value={w.id}>{fmtDate(w.date)} · {w.dayLabel}</option>
+          ))}
+        </select>
+
+        {!energy ? (
+          <div className="f-body text-xs mt-2" style={{ color: C.dim }}>Нужен хотя бы один замер веса — без веса тела расход не посчитать.</div>
+        ) : (<>
+          <div className="flex gap-2 mt-3">
+            <Chip label="всего сожжено" value={`~${energy.gross}`} sub="ккал" accent={C.mustard} />
+            {energy.rest > 0 && <Chip label="сверх покоя" value={`~${energy.net}`} sub="ккал" accent={C.moss} />}
+          </div>
+
+          {/* Откуда взялись эти числа. Без этого цифра выглядит взятой
+              с потолка, а она собрана из того, что записано в журнале. */}
+          <div className="mt-3">
+            <div className="f-body text-xs uppercase tracking-wide mb-1" style={{ color: C.dim }}>Как посчитано</div>
+            <CalcLine k="Длительность" v={`${energy.minutes} мин`} hint={DUR_SOURCE[energy.source]} />
+            <CalcLine k="Под нагрузкой" v={`${energy.workMin} мин`}
+              hint={`${Math.round(energy.density * 100)}% времени — ${energy.level.label}, ${met} МЕТ · ${
+                energy.measured >= 0.5
+                  ? `по секундомеру подходов${energy.measured < 1 ? " (часть оценена)" : ""}`
+                  : "оценка по темпу, около трёх секунд на повторение"
+              }${energy.uniEstimate ? " · одной рукой считается за две стороны" : ""}`} />
+            <CalcLine k="Вес тела" v={`${energy.bodyKg} кг`} hint={`замер ${fmtDate(energy.weightDate)}`} />
+            <CalcLine k="Всего" v={`${energy.gross} ккал`}
+              hint={`${met} × 3,5 × ${energy.bodyKg} ÷ 200 × ${energy.minutes}`} />
+            {energy.rest > 0 && (
+              <CalcLine k="Минус покой" v={`−${energy.rest} ккал`} hint="столько сгорело бы просто лёжа за это же время" />
+            )}
+          </div>
+
+          <div className="f-body text-xs mt-3" style={{ color: C.dim }}>
+            МЕТ — во сколько раз движение затратнее лежания; плотность берётся
+            из самой записи, поэтому час с долгими паузами и час без передышки
+            считаются по-разному. «Сверх покоя» — честная прибавка к суточному
+            расходу: обмен веществ идёт и без тренировки, и дважды его считать
+            нельзя. Разброс между людьми одного веса доходит до трети,
+            так что главный ориентир на дефиците — динамика веса и талии.
+          </div>
+        </>)}
+      </>)}
+    </div>
+  );
+}
+
+/* Дневник: и записи, и итоги. Раньше это были две вкладки — «Журнал»
+   и «Графики», хотя обе отвечают на один вопрос «как идёт». Сравнение при
+   этом жило через экран от тренировок, которые сравнивает. */
+function DiaryTab({ view, setView, workouts, onDelete, onExport, onUpdate, onAdd, days, conditions, bodyAt, gear,
+                    metrics, bmr, restOverrides }) {
+  return (
+    <div>
+      <div className="px-4 pt-4">
+        <div className="flex rounded-lg overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
+          {[["records", "Записи"], ["totals", "Итоги"]].map(([id, l]) => (
+            <button key={id} onClick={() => setView(id)} className="f-body flex-1 text-xs py-2"
+              style={{ background: view === id ? C.red : C.surface, color: view === id ? C.chalk : C.dim }}>{l}</button>
+          ))}
+        </div>
+      </div>
+      {view === "records"
+        ? <JournalTab workouts={workouts} onDelete={onDelete} onExport={onExport} onUpdate={onUpdate} onAdd={onAdd} days={days} conditions={conditions} bodyAt={bodyAt} gear={gear} />
+        : (
+          <>
+            <ProgressTab workouts={workouts} bodyAt={bodyAt} metrics={metrics} bmr={bmr} restOverrides={restOverrides} />
+            <div className="px-4 pb-8 -mt-4">
+              <WorkoutEnergyCard workouts={workouts} metrics={metrics} bmr={bmr} restOverrides={restOverrides} />
+            </div>
+          </>
+        )}
+    </div>
+  );
+}
+
 function BodyTab({ metrics, profile, setProfile, onAdd, onDelete, workouts, restOverrides }) {
   const [form, setForm] = useState({ date: today() });
   const [showForm, setShowForm] = useState(false);
@@ -2533,8 +2716,6 @@ function BodyTab({ metrics, profile, setProfile, onAdd, onDelete, workouts, rest
           <option value="1.725">Высокая (6–7 трен/нед)</option>
         </select>
       </div>
-
-      <ConditionsCard profile={profile} setProfile={setProfile} />
 
       {latest ? (
         <div>
@@ -2625,54 +2806,6 @@ function BodyTab({ metrics, profile, setProfile, onAdd, onDelete, workouts, rest
         {tdee ? (
           <div className="flex gap-2"><Chip label="базовый обмен" value={bmr} sub="ккал/сут" /><Chip label="поддержание" value={tdee} sub="ккал/сут" /></div>
         ) : <div className="f-body text-xs" style={{ color: C.dim }}>Заполни профиль и добавь замер веса.</div>}
-        <div className="f-body text-xs uppercase tracking-wide mt-4 mb-2" style={{ color: C.dim }}>Расход за тренировку</div>
-        {!recent.length ? (
-          <div className="f-body text-xs" style={{ color: C.dim }}>Пока нечего считать: расход берётся из записи в журнале.</div>
-        ) : (<>
-          <select value={picked?.id || ""} onChange={(e) => setEnergyId(e.target.value)} aria-label="Тренировка для расчёта расхода"
-            className="f-body w-full rounded-lg px-3 py-2.5 text-sm" style={inp}>
-            {recent.map((w) => (
-              <option key={w.id} value={w.id}>{fmtDate(w.date)} · {w.dayLabel}</option>
-            ))}
-          </select>
-
-          {!energy ? (
-            <div className="f-body text-xs mt-2" style={{ color: C.dim }}>Нужен хотя бы один замер веса — без веса тела расход не посчитать.</div>
-          ) : (<>
-            <div className="flex gap-2 mt-3">
-              <Chip label="всего сожжено" value={`~${energy.gross}`} sub="ккал" accent={C.mustard} />
-              {energy.rest > 0 && <Chip label="сверх покоя" value={`~${energy.net}`} sub="ккал" accent={C.moss} />}
-            </div>
-
-            {/* Откуда взялись эти числа. Без этого цифра выглядит взятой
-                с потолка, а она собрана из того, что записано в журнале. */}
-            <div className="mt-3">
-              <div className="f-body text-xs uppercase tracking-wide mb-1" style={{ color: C.dim }}>Как посчитано</div>
-              <CalcLine k="Длительность" v={`${energy.minutes} мин`} hint={DUR_SOURCE[energy.source]} />
-              <CalcLine k="Под нагрузкой" v={`${energy.workMin} мин`}
-                hint={`${Math.round(energy.density * 100)}% времени — ${energy.level.label}, ${met} МЕТ · ${
-                  energy.measured >= 0.5
-                    ? `по секундомеру подходов${energy.measured < 1 ? " (часть оценена)" : ""}`
-                    : "оценка по темпу, около трёх секунд на повторение"
-                }${energy.uniEstimate ? " · одной рукой считается за две стороны" : ""}`} />
-              <CalcLine k="Вес тела" v={`${energy.bodyKg} кг`} hint={`замер ${fmtDate(energy.weightDate)}`} />
-              <CalcLine k="Всего" v={`${energy.gross} ккал`}
-                hint={`${met} × 3,5 × ${energy.bodyKg} ÷ 200 × ${energy.minutes}`} />
-              {energy.rest > 0 && (
-                <CalcLine k="Минус покой" v={`−${energy.rest} ккал`} hint="столько сгорело бы просто лёжа за это же время" />
-              )}
-            </div>
-
-            <div className="f-body text-xs mt-3" style={{ color: C.dim }}>
-              МЕТ — во сколько раз движение затратнее лежания; плотность берётся
-              из самой записи, поэтому час с долгими паузами и час без передышки
-              считаются по-разному. «Сверх покоя» — честная прибавка к суточному
-              расходу: обмен веществ идёт и без тренировки, и дважды его считать
-              нельзя. Разброс между людьми одного веса доходит до трети,
-              так что главный ориентир на дефиците — динамика веса и талии.
-            </div>
-          </>)}
-        </>)}
       </div>
 
       {showForm && (
@@ -2713,6 +2846,7 @@ export default function App() {
      сверху — так же, как если бы его открыли впервые. */
   const scroller = useRef(null);
   const [baseView, setBaseView] = useState(null);
+  const [diaryView, setDiaryView] = useState("records");
   const [workouts, setWorkouts] = useState([]);
   const [metrics, setMetrics] = useState([]);
   const [days, setDaysState] = useState([]);
@@ -2769,7 +2903,7 @@ export default function App() {
     saveKey("profile", next);
     return next;
   }), []);
-  const finishSession = useCallback((w) => { setWorkouts((prev) => { const next = [w, ...prev]; saveKey("workouts", next); return next; }); setSession(null); setTab("journal"); }, [setSession]);
+  const finishSession = useCallback((w) => { setWorkouts((prev) => { const next = [w, ...prev]; saveKey("workouts", next); return next; }); setSession(null); setDiaryView("records"); setTab("diary"); }, [setSession]);
   const deleteWorkout = useCallback((id) => setWorkouts((prev) => { const next = prev.filter((w) => w.id !== id); saveKey("workouts", next); return next; }), []);
   /* правка записи: пустая тренировка после удаления всех упражнений исчезает из журнала */
   /* запись задним числом: тренировка приходит уже готовой, без живой сессии */
@@ -2913,25 +3047,41 @@ export default function App() {
   /* знакомство сразу после условий: без роста, веса и возраста половина
      расчётов показывает прочерки, а искать их во вкладке «Тело» никто
      не догадается. Спрашиваем один раз и разрешаем пропустить. */
+  /* Знакомство отдаёт всё разом: профиль, травмы, инвентарь и программу.
+     Всё необязательное — пропущенный шаг просто не меняет ничего. */
   const finishSetup = (v) => {
-    const p = { ...profile };
     if (v) {
+      const p = { ...profile };
       if (v.height) p.height = v.height;
       if (v.age) p.age = v.age;
       if (v.sex) p.sex = v.sex;
+      if (v.conditions?.length) p.conditions = v.conditions;
       setProfile(p);
       if (+v.weight > 0) addMetric({ id: uid(), date: today(), weight: v.weight });
+      if (v.gear) setGear(v.gear);
+      if (v.days?.length) {
+        setDays(v.days.map((d) => ({ id: uid(), name: d.name, exercises: d.ex || d.exercises || [] })));
+        /* Собрал пустой день — сразу открываем его, а не оставляем гадать,
+           где он теперь лежит. */
+        if (v.days.length === 1 && !(v.days[0].ex || v.days[0].exercises || []).length) {
+          setBaseView("days");
+          setTab("plan");
+        }
+      }
     }
     setSetupSeen(true);
     saveKey("setup", true);
   };
-  if (!setupSeen) return <SetupGate onDone={finishSetup} onSkip={() => finishSetup(null)} />;
+  if (!setupSeen) return <SetupGate onDone={finishSetup} />;
 
+  /* Четыре вкладки вместо пяти, и названы делами, а не хранилищами.
+     «План» — что я буду делать, «Тренировка» — делаю, «Дневник» — как идёт.
+     Прежние «Журнал» и «Графики» отвечали на один и тот же вопрос и потому
+     съехались в один раздел. */
   const tabs = [
-    { id: "session", label: "Сессия", icon: Play },
-    { id: "journal", label: "Журнал", icon: BookOpen },
-    { id: "progress", label: "Графики", icon: TrendingUp },
-    { id: "base", label: "База", icon: Library },
+    { id: "session", label: "Тренировка", icon: Play },
+    { id: "plan", label: "План", icon: Library },
+    { id: "diary", label: "Дневник", icon: BookOpen },
     { id: "body", label: "Тело", icon: Dumbbell },
   ];
 
@@ -2951,10 +3101,9 @@ export default function App() {
       <div ref={scroller} className="flex-1 overflow-y-auto w-full max-w-xl mx-auto" role="tabpanel" id="tabpanel"
         style={{ overscrollBehavior: "contain" }} aria-labelledby={`tab-${shownTab}`}>
         <div key={shownTab} className="tab-in">
-        {shownTab === "session" && <SessionTab session={session} setSession={setSession} workouts={workouts} days={days} onFinish={finishSession} goToDays={() => { setBaseView("days"); setTab("base"); }} conditions={conditions} restOverrides={restOverrides} setRestOverride={setRestOverride} muted={muted} bodyAt={bodyAt} gear={gear} />}
-        {shownTab === "journal" && <JournalTab workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} onUpdate={updateWorkout} onAdd={addWorkout} days={days} conditions={conditions} bodyAt={bodyAt} gear={gear} />}
-        {shownTab === "progress" && <ProgressTab workouts={workouts} bodyAt={bodyAt} metrics={metrics} bmr={bmr} restOverrides={restOverrides} />}
-        {shownTab === "base" && <BaseTab days={days} setDays={setDays} initialView={baseView} conditions={conditions} gear={gear} setGear={setGear} />}
+        {shownTab === "session" && <SessionTab session={session} setSession={setSession} workouts={workouts} days={days} onFinish={finishSession} goToDays={() => { setBaseView("days"); setTab("plan"); }} conditions={conditions} restOverrides={restOverrides} setRestOverride={setRestOverride} muted={muted} bodyAt={bodyAt} gear={gear} />}
+        {shownTab === "plan" && <BaseTab days={days} setDays={setDays} initialView={baseView} conditions={conditions} gear={gear} setGear={setGear} profile={profile} setProfile={setProfile} />}
+        {shownTab === "diary" && <DiaryTab view={diaryView} setView={setDiaryView} workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} onUpdate={updateWorkout} onAdd={addWorkout} days={days} conditions={conditions} bodyAt={bodyAt} gear={gear} metrics={metrics} bmr={bmr} restOverrides={restOverrides} />}
         {shownTab === "body" && <BodyTab metrics={metrics} profile={profile} setProfile={setProfile} onAdd={addMetric} onDelete={deleteMetric} workouts={workouts} restOverrides={restOverrides} />}
         </div>
       </div>
@@ -3144,7 +3293,9 @@ export default function App() {
           <button onClick={async () => { try { await navigator.clipboard.writeText(backupJSON()); say("Копия в буфере обмена"); } catch { setShowSettings(false); setExportText(backupJSON()); } }} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Copy size={15} /> Скопировать копию текстом</button>
           <button onClick={openImport} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Upload size={15} /> Восстановить из копии</button>
           <button onClick={() => { setShowSettings(false); setShowTerms(true); }} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><FileText size={15} /> О приложении и ограничениях</button>
-          <div className="mb-2"><ConfirmButton onConfirm={() => { setDays(DEFAULT_DAYS); setShowSettings(false); say("Дни возвращены к исходным"); }} question="Свои дни будут заменены" className="f-body w-full rounded-xl py-3 text-sm flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><RotateCcw size={15} /> Сбросить дни к исходным</ConfirmButton></div>
+          {/* «Исходных» дней больше нет — приложение раздаётся пустым. Так что
+              это уже не сброс к чему-то, а честное удаление своих дней. */}
+          <div className="mb-2"><ConfirmButton onConfirm={() => { setDays([]); setShowSettings(false); say("Дни удалены"); }} question="Все дни будут удалены. Записи останутся" className="f-body w-full rounded-xl py-3 text-sm flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><RotateCcw size={15} /> Удалить все дни</ConfirmButton></div>
           <ConfirmButton onConfirm={wipe} question="Стереть весь дневник?" className="f-body w-full rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.redText, border: `1px solid ${C.line}` }}><Trash2 size={15} /> Удалить все записи</ConfirmButton>
           <button onClick={() => setShowSettings(false)} className="f-body w-full mt-2 py-3 text-sm" style={{ color: C.dim }}>Закрыть</button>
           {/* Версия и способ запуска — на виду и одним касанием в буфер.

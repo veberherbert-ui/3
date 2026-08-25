@@ -20,8 +20,26 @@ import { EXDB, MOVES, moveOf, fitsGear } from "../data/exercises.js";
 
 /** Сколько мышц можно потерять, прежде чем сплит перестаёт быть собой. */
 const MUSCLES_LOST_OK = 1;
+
 /** Доля выживших упражнений, ниже которой это уже другая программа. */
 const KEEP_MIN = 0.75;
+
+/** Порядок в списке сплитов: подходящие вперёд, неподходящие в конец. */
+const RANK = { native: 0, adapted: 1, poor: 2 };
+
+/**
+ * Порядок в списке сплитов.
+ *
+ * Сперва пригодность: подходящее как есть, потом требующее замен, в конце
+ * непригодное. Внутри — сколько из имеющегося пошло в дело: программа
+ * с одного пола формально подходит и тому, у кого есть гантели, но
+ * предлагать её первой странно — он сказал, чем располагает, и ждёт,
+ * что это используют.
+ */
+export const byFit = (a, b) =>
+  RANK[a.fit.verdict] - RANK[b.fit.verdict]
+  || b.fit.uses - a.fit.uses
+  || a.fit.swaps - b.fit.swaps;
 
 /**
  * Похожие упражнения — те же, из которых собирается автозамена, только
@@ -97,7 +115,7 @@ export function adaptDay(names, gear) {
 /**
  * Подогнать весь сплит и оценить, что от него осталось.
  * @returns {{days:{name:string,ex:string[]}[], swaps:number, lost:string[],
- *   lostMuscles:string[], keep:number, verdict:"native"|"adapted"|"poor"}}
+ *   lostMuscles:string[], keep:number, uses:number, verdict:"native"|"adapted"|"poor"}}
  */
 export function adaptPreset(preset, gear) {
   const days = [];
@@ -115,6 +133,13 @@ export function adaptPreset(preset, gear) {
   const keep = total ? (total - lost.length) / total : 1;
   const lostMuscles = [...new Set(lost.map((n) => EXDB[n]?.m).filter(Boolean))];
 
+  /* Сколько снарядов из имеющихся сплит вообще пускает в дело. Программа
+     с одного пола формально подходит и тому, у кого есть гантели, — но
+     предлагать её первой человеку с гантелями странно: он сказал, чем
+     располагает, и ждёт, что это используют. */
+  const used = new Set(days.flatMap((d) => d.ex.map((n) => EXDB[n]?.eq).filter(Boolean)));
+  const uses = gear?.length ? gear.filter((g) => used.has(g)).length : used.size;
+
   /* Приговор по потерянным мышцам, а не по проценту: девять замен без
      потерь — это тот же сплит другим снарядом, а две потерянные мышцы
      ломают его замысел, сколько бы упражнений ни уцелело. */
@@ -125,5 +150,5 @@ export function adaptPreset(preset, gear) {
         ? "adapted"
         : "native";
 
-  return { days, swaps, lost, lostMuscles, keep, verdict };
+  return { days, swaps, lost, lostMuscles, keep, uses, verdict };
 }
