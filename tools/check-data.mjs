@@ -164,6 +164,34 @@ Object.keys(BW_SHARE).forEach((name) => {
     fail("подсчёт", "две гантели работают одновременно — время удваивать не нужно");
 }
 
+/* ---- планка браузера ---- */
+/* Сборщик сам поднимает нижнюю границу вслед за «широко доступными»
+   браузерами, и в файл начинает попадать синтаксис, которого старый телефон
+   не понимает. Разбор падает целиком — человек видит белый экран без единой
+   строчки в консоли, потому что до выполнения дело не доходит. Проверяем
+   готовую сборку, если она есть: конфиг может говорить что угодно. */
+{
+  const { readdirSync, readFileSync, existsSync } = await import("node:fs");
+  if (existsSync("dist/assets")) {
+    const modern = {
+      "??=": /\?\?=/,
+      "||=": /\|\|=/,
+      "&&=": /&&=/,
+      "статический блок класса": /static\s*\{/,
+      "приватные поля класса": /[^\w]#\w+\s*[=;(]/,
+      "поиск назад в регулярке": /\(\?<[=!]/,
+    };
+    readdirSync("dist/assets")
+      .filter((f) => f.endsWith(".js"))
+      .forEach((f) => {
+        const code = readFileSync(`dist/assets/${f}`, "utf8");
+        Object.entries(modern).forEach(([label, re]) => {
+          if (re.test(code)) fail("сборка", `в ${f} остался ${label} — старые телефоны не разберут файл`);
+        });
+      });
+  }
+}
+
 if (problems.length) {
   console.error(`\n✗ Найдено проблем: ${problems.length}\n`);
   problems.slice(0, 40).forEach((p) => console.error(`  • ${p.where}: ${p.what}`));

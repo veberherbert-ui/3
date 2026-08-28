@@ -30,6 +30,65 @@
   </head>
   <body>
     <div id="root"></div>
+
+    <!-- Экран поломки.
+
+         Если приложение не запустится — не разберётся файл на старом
+         телефоне, оборвётся загрузка, упадёт первый же рендер, — человек
+         видел белый экран и ничего больше. Ни он, ни тот, кому он об этом
+         скажет, не могли узнать даже, дошло ли дело до выполнения кода.
+
+         Поэтому разметка ниже лежит прямо в странице и не зависит ни от
+         одного скрипта. Обычный скрипт (не module) её показывает: браузер,
+         который не понял современный синтаксис в модуле, этот файл разберёт
+         в любом случае. Если приложение поднялось — блок убирается. -->
+    <div id="crash" hidden style="position:fixed;inset:0;padding:24px;background:#15171B;color:#EDEAE3;font:16px/1.5 system-ui,-apple-system,sans-serif;overflow:auto">
+      <h1 style="font-size:20px;margin:0 0 12px">Приложение не запустилось</h1>
+      <p style="margin:0 0 12px;color:#8A9099">Чаще всего это значит, что версия браузера
+        слишком старая. Дневник работает в Safari с 12-й версии и в Chrome с 70-й.</p>
+      <p style="margin:0 0 12px;color:#8A9099">Что можно попробовать: обновить браузер или
+        систему, открыть ссылку в другом браузере, а если приложение было установлено —
+        удалить его с экрана и открыть ссылку заново.</p>
+      <p style="margin:0 0 6px;color:#8A9099">Покажите эту строку тому, кто дал вам ссылку:</p>
+      <pre id="crash-info" style="white-space:pre-wrap;word-break:break-word;background:#1C1F24;padding:12px;border-radius:8px;font-size:13px;margin:0"></pre>
+    </div>
+
+    <script>
+      (function () {
+        var shown = false;
+        function show(what) {
+          if (shown) return;
+          shown = true;
+          var box = document.getElementById("crash");
+          var info = document.getElementById("crash-info");
+          if (!box || !info) return;
+          box.hidden = false;
+          info.textContent = [what, navigator.userAgent].join("\n\n");
+        }
+        /* Ошибка разбора или выполнения — в том числе в модуле, который
+           старый браузер не понял. Фаза захвата обязательна: сбой загрузки
+           самого файла происходит на теге script и до window иначе
+           не доходит. */
+        window.addEventListener("error", function (e) {
+          if (e && e.target && e.target !== window && e.target.src) {
+            show("не загрузился файл: " + e.target.src);
+            return;
+          }
+          show((e && e.message) || "неизвестная ошибка");
+        }, true);
+        window.addEventListener("unhandledrejection", function (e) {
+          show("сбой загрузки: " + ((e && e.reason && e.reason.message) || e.reason || "?"));
+        });
+        /* Ничего не упало, но и не нарисовалось — значит скрипт не дошёл. */
+        window.addEventListener("load", function () {
+          setTimeout(function () {
+            var root = document.getElementById("root");
+            if (!root || root.childElementCount === 0) show("приложение не отрисовалось за 6 секунд");
+          }, 6000);
+        });
+      })();
+    </script>
+
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

@@ -140,7 +140,7 @@ ok(await visible(page.getByText("Чем занимаешься")), "третий
 await page.getByRole("button", { name: /Полный зал/ }).first().click();
 await page.waitForTimeout(600);
 ok(await visible(page.getByText("С чего начнём")), "четвёртый шаг — программа");
-const offered = await page.locator("h1").locator("..").innerText();
+const offered = await page.locator("h1:not(#crash h1)").locator("..").innerText();
 ok(/Собрать свою/.test(offered) && /Просто записывать/.test(offered),
   "предложены и готовая программа, и свой день, и запись без плана");
 await page.getByRole("button", { name: /4 дня: грудь\+бицепс/ }).first().click();
@@ -874,6 +874,27 @@ ok(a11y.tiny === 0, "нет текста мельче 13px", a11y.tiny ? `наш
 ok(a11y.noLabel === 0, "у всех кнопок есть подпись для диктора", a11y.noLabel ? `без подписи ${a11y.noLabel}` : "");
 ok(a11y.zoomy === 0, "поля ввода не вызывают автозум на iOS");
 ok(a11y.bare === 0, "у всех полей ввода есть подпись", a11y.bare ? `без подписи ${a11y.bare}` : "");
+
+section("Когда всё сломалось");
+/* Белый экран не сообщает ничего ни тому, кто его видит, ни тому, кому он
+   об этом скажет. Разметка поломки лежит в самой странице и не зависит
+   ни от одного скрипта — значит показывается и тогда, когда файл
+   приложения не разобрался или не догрузился. */
+ok(!(await page.locator("#crash").isVisible()), "при исправной работе экран поломки скрыт");
+/* Чистое окружение: в основном контексте уже стоит служебный поток,
+   и он отдаёт файл из кеша в обход оборванного запроса — приложение
+   поднимается, и проверять становится нечего. */
+const brokenCtx = await browser.newContext({ ...devices[DEVICE], locale: "ru-RU", serviceWorkers: "block" });
+const broken = await brokenCtx.newPage();
+await broken.route("**/assets/index-*.js", (r) => r.abort());
+await broken.goto(URL, { waitUntil: "domcontentloaded" });
+await broken.waitForTimeout(2000);
+const crashShown = await broken.locator("#crash").isVisible();
+ok(crashShown, "не загрузился главный файл — видно объяснение, а не белый экран");
+const crashText = crashShown ? await broken.locator("#crash").innerText() : "";
+ok(/Safari|Chrome/.test(crashText), "названы поддерживаемые браузеры");
+ok(/Mozilla|AppleWebKit|Chrome/.test(crashText), "видна строка браузера — её можно переслать");
+await brokenCtx.close();
 
 section("Итог");
 ok(errors.length === 0, "ошибок в консоли нет", errors.slice(0, 3).join(" | "));
