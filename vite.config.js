@@ -35,6 +35,13 @@ export default defineConfig({
     __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
   },
   plugins: [
+    /* Метка сборки прямо в разметку: экран поломки показывает её, даже
+       когда ни один модуль не выполнился. Без неё непонятно, на какой
+       версии человек застрял. */
+    {
+      name: "build-id-html",
+      transformIndexHtml: (html) => html.replace(/__BUILD__/g, buildId),
+    },
     react(),
     VitePWA({
       registerType: "autoUpdate",

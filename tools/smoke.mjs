@@ -881,19 +881,27 @@ section("Когда всё сломалось");
    ни от одного скрипта — значит показывается и тогда, когда файл
    приложения не разобрался или не догрузился. */
 ok(!(await page.locator("#crash").isVisible()), "при исправной работе экран поломки скрыт");
-/* Чистое окружение: в основном контексте уже стоит служебный поток,
-   и он отдаёт файл из кеша в обход оборванного запроса — приложение
-   поднимается, и проверять становится нечего. */
+/* Установленное приложение умеет само себя заклинить: служебный поток
+   отдаёт из кеша старую разметку, а файлы, на которые она ссылается,
+   к тому времени стёрты и с устройства, и с сервера. Раньше это был белый
+   экран навсегда — выйти можно было только удалив значок с экрана.
+
+   Чистое окружение: в основном контексте служебный поток уже стоит
+   и отдаёт файл из кеша в обход оборванного запроса. */
 const brokenCtx = await browser.newContext({ ...devices[DEVICE], locale: "ru-RU", serviceWorkers: "block" });
 const broken = await brokenCtx.newPage();
-await broken.route("**/assets/index-*.js", (r) => r.abort());
+let tries = 0;
+await broken.route("**/assets/index-*.js", (r) => { tries++; r.abort(); });
 await broken.goto(URL, { waitUntil: "domcontentloaded" });
-await broken.waitForTimeout(2000);
+await broken.waitForTimeout(4000);
+ok(tries === 2, "первый сбой приложение чинит молча и перезапускается", `попыток загрузки: ${tries}`);
 const crashShown = await broken.locator("#crash").isVisible();
-ok(crashShown, "не загрузился главный файл — видно объяснение, а не белый экран");
+ok(crashShown, "если и починка не помогла — видно объяснение, а не белый экран");
 const crashText = crashShown ? await broken.locator("#crash").innerText() : "";
-ok(/Safari|Chrome/.test(crashText), "названы поддерживаемые браузеры");
-ok(/Mozilla|AppleWebKit|Chrome/.test(crashText), "видна строка браузера — её можно переслать");
+ok(/Починить и перезапустить/.test(crashText), "есть кнопка починки — без удаления приложения с экрана");
+ok(/Записи тренировок при починке не пострадают/.test(crashText), "сказано, что записи уцелеют");
+ok(/сборка \S+/.test(crashText), "видна метка сборки — понятно, на какой версии человек застрял");
+ok(/Mozilla|AppleWebKit/.test(crashText), "видна строка браузера — её можно переслать");
 await brokenCtx.close();
 
 section("Итог");
