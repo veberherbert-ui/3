@@ -2,6 +2,7 @@ import { EXDB, GROUPS, PUSH_M, PULL_M, moveOf, BW_STATIC } from "../data/exercis
 import { exTonnage, workoutTonnage, topWeight, topReps, est1RM, r1 } from "./calc.js";
 import { workoutEnergy } from "./energy.js";
 import { daysAgo } from "./dates.js";
+import { allTags } from "../data/tags.js";
 
 /* Что считать, чтобы вкладка «Графики» отвечала на вопросы, а не задавала их.
 
@@ -230,7 +231,7 @@ export function tagHistory(workouts, name, tag, days = 90) {
   (workouts || []).forEach((w) => {
     if (w.date < from) return;
     (w.exercises || []).forEach((ex) => {
-      if (ex.name !== name || !ex.tags?.includes(tag)) return;
+      if (ex.name !== name || !allTags(ex).includes(tag)) return;
       times++;
       if (!last || w.date > last) last = w.date;
     });
@@ -298,7 +299,7 @@ const beatsRange = (reps, target) =>
 
 export function weightAdvice(ex) {
   if (!ex || BW_STATIC.has(ex.name) || !ex.sets?.length) return null;
-  const tags = ex.tags || [];
+  const tags = allTags(ex);
   const reps = workingSets(ex).map((s) => +s.reps || 0);
   const dirty = tags.includes("cheat") || tags.includes("partial");
 
@@ -318,4 +319,7 @@ export function weightAdvice(ex) {
 }
 
 /** Верить ли расчётному максимуму: читинг и частичные его завышают. */
-export const rmDoubtful = (ex) => !!(ex?.tags?.includes("cheat") || ex?.tags?.includes("partial"));
+export const rmDoubtful = (ex) => {
+  const t = allTags(ex);
+  return t.includes("cheat") || t.includes("partial");
+};

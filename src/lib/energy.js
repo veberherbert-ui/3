@@ -1,4 +1,5 @@
 import { restFor } from "./rest.js";
+import { hasSetTags } from "../data/tags.js";
 import { weightNear } from "./calc.js";
 
 /* Расход калорий за конкретную тренировку.
@@ -61,11 +62,18 @@ export const tagFactor = (tags) => blend((tags || []).map((t) => TAG_ALL[t] ?? T
 const dropLogged = (sets, i) =>
   i === sets.length - 1 && i > 0 && +sets[i].weight > 0 && +sets[i].weight < +sets[i - 1].weight;
 
-/** Множитель для одного подхода: техника упражнения плюс то, что случилось
-    в этом конкретном подходе. */
+/** Множитель для одного подхода.
+
+    Если у подхода есть свои метки — берём их как есть, гадать не о чем.
+    Если нет, запись старая: метки лежат на упражнении, и приходится
+    угадывать, к какому подходу они относились. */
 function setFactor(ex, i) {
-  const tags = ex?.tags || [];
   const sets = ex?.sets || [];
+  if (hasSetTags(ex)) {
+    const own = sets[i]?.tags || [];
+    return blend(own.map((t) => TAG_ALL[t] ?? TAG_SET[t]).filter(Boolean));
+  }
+  const tags = ex?.tags || [];
   const all = tags.map((t) => TAG_ALL[t]).filter(Boolean);
   const mine = [];
   /* поздняя половина подходов: при четырёх — два последних, при одном — он */
@@ -123,8 +131,10 @@ export function workSecondsOf(workout) {
 
 /** Есть ли оценённые подходы с метками, растягивающими время. */
 export function hasTagged(workout) {
-  for (const ex of workout.exercises || [])
-    if (setSecondsOf(ex).some((sec, i) => sec !== setSecondsOf({ ...ex, tags: [] })[i])) return true;
+  for (const ex of workout.exercises || []) {
+    const bare = { ...ex, tags: [], sets: (ex.sets || []).map((s) => ({ ...s, tags: undefined })) };
+    if (setSecondsOf(ex).some((sec, i) => sec !== setSecondsOf(bare)[i])) return true;
+  }
   return false;
 }
 

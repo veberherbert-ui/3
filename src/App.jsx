@@ -4,7 +4,7 @@ import { Plus, X, TrendingUp, BookOpen, Dumbbell, Flame, Settings, Trash2, Check
 import { EXDB, GROUPS, PRESETS, DEFAULT_DAYS, isUni, isBW, isPair, GEAR, GEAR_PRESETS, fitsGear, moveOf, variantsOf } from "./data/exercises.js";
 import { CONDITIONS, CONDITION_BY_ID, helpfulNote } from "./data/conditions.js";
 import { TECHNIQUE } from "./data/technique.js";
-import { TAGS, TAG_BY_ID, tagLine } from "./data/tags.js";
+import { TAGS, TAG_BY_ID, tagLine, allTags, hasSetTags } from "./data/tags.js";
 import { saferAlternatives, worstRisk, risksFor, dayWarnings } from "./lib/swap.js";
 import { C, plateColor, GROUP_COLOR } from "./lib/theme.js";
 import { today, daysAgo, fmtDate } from "./lib/dates.js";
@@ -593,6 +593,53 @@ function SetButton({ set, index, exName, onToggle }) {
   );
 }
 
+/** Метки конкретного подхода — для отображения на его номере. */
+const setTags = (ex, j) => (Array.isArray(ex?.sets?.[j]?.tags) ? ex.sets[j].tags : []);
+
+/** Метки, стоящие на всех подходах сразу, — их и показывает лист упражнения. */
+const commonTags = (ex) => {
+  const sets = ex?.sets || [];
+  if (!sets.length) return [];
+  return TAGS.map((t) => t.id).filter((id) => sets.every((_, j) => setTags(ex, j).includes(id)));
+};
+
+/* Перевести упражнение на подходные метки, разложив старые общие по всем
+   подходам: иначе первое же касание номера стёрло бы то, что уже стояло. */
+function withSetTags(ex) {
+  if (hasSetTags(ex)) return ex;
+  const shared = ex.tags || [];
+  return { ...ex, tags: undefined, sets: ex.sets.map((s) => ({ ...s, tags: [...shared] })) };
+}
+
+/* Номер подхода — он же кнопка меток.
+
+   Метка нужна на подходе, а не на упражнении: отказал третий, дроп был
+   в последнем. Но чип на каждой строке — это ровно та перегрузка, ради
+   которой мы убирали секундомер.
+
+   Цифра слева уже стоит в каждой строке, уже означает «этот подход»
+   и до сих пор ничего не делала. Она и становится ручкой: рамка вокруг
+   говорит, что сюда можно нажать, залитая цифра — что метка стоит.
+   Новых элементов на экране ноль. */
+function SetNo({ index, tags, onOpen, exName }) {
+  const has = tags?.length > 0;
+  const warn = tags?.includes("pain");
+  return (
+    <button onClick={onOpen}
+      aria-label={`${exName}, подход ${index + 1}: метки${has ? ` — ${tagLine(tags)}` : ""}`}
+      className="f-num shrink-0 rounded-lg flex items-center justify-center text-xs"
+      style={{
+        width: 28, minHeight: 44,
+        background: has ? (warn ? C.redText : C.mustard) : "transparent",
+        color: has ? C.bg : C.dim,
+        border: `1px solid ${has ? "transparent" : C.line}`,
+        fontWeight: has ? 600 : 400,
+      }}>
+      {index + 1}
+    </button>
+  );
+}
+
 /** Метки за кнопкой — для форм, где карточек много и место дорого. */
 function TagBlock({ tags = [], onToggle }) {
   const [open, setOpen] = useState(false);
@@ -810,6 +857,8 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
   const [blanksWarn, setBlanksWarn] = useState(false);
   /* Какое упражнение меняем перед стартом. */
   const [swapName, setSwapName] = useState(null);
+  /* Какой подход помечаем: {упражнение, подход}. */
+  const [tagFor, setTagFor] = useState(null);
 
   const day = days.find((d) => d.id === pickDay) || days[0];
   useEffect(() => { if (day) setPicked(day.exercises); }, [pickDay, days.length]); // eslint-disable-line
@@ -1056,10 +1105,28 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
     return { ...s, exercises: ex };
   });
   const rmExercise = (i) => setSession((s) => ({ ...s, exercises: s.exercises.filter((_, k) => k !== i) }));
+  /* Метка на одном подходе. Первое такое касание переводит всё упражнение
+     на подходные метки: старые общие раскладываются по подходам, чтобы
+     ничего не пропало. */
+  const toggleSetTag = (i, j, id) => setSession((s) => {
+    const list = [...s.exercises];
+    list[i] = withSetTags(list[i]);
+    const sets = [...list[i].sets];
+    const cur = sets[j].tags || [];
+    sets[j] = { ...sets[j], tags: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] };
+    list[i] = { ...list[i], sets };
+    return { ...s, exercises: list };
+  });
+  /* Лист упражнения теперь ставит метку сразу на все подходы: отработал
+     упражнение целиком в отказ — одно касание, как и раньше. */
   const toggleTag = (i, id) => setSession((s) => {
     const list = [...s.exercises];
-    const cur = list[i].tags || [];
-    list[i] = { ...list[i], tags: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] };
+    const ex = withSetTags(list[i]);
+    const on = ex.sets.every((set) => (set.tags || []).includes(id));
+    list[i] = { ...ex, sets: ex.sets.map((set) => {
+      const cur = set.tags || [];
+      return { ...set, tags: on ? cur.filter((x) => x !== id) : cur.includes(id) ? cur : [...cur, id] };
+    }) };
     return { ...s, exercises: list };
   });
   /* решил доделать что-то сверх плана — добавляем прямо на ходу */
@@ -1088,7 +1155,8 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
       name: e.name, bodyweight: e.bodyweight, uni: !!e.uni, pair: !!e.pair,
       tags: e.tags?.length ? e.tags : undefined,
       sets: e.sets.filter((s) => !blank(s.reps) && (e.bodyweight || !blank(s.weight)))
-        .map((s) => ({ reps: +s.reps, weight: setWeight(e, s) })),
+        /* метки подхода едут вместе с ним: без них он теряет половину смысла */
+        .map((s) => ({ reps: +s.reps, weight: setWeight(e, s), tags: s.tags?.length ? s.tags : undefined })),
     })).filter((e) => e.sets.length);
     setMenu(false);
     if (!cleaned.length) { setSession(null); return; }
@@ -1172,7 +1240,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
                   <span className="f-body text-sm block truncate" style={{ color: C.dim }}>{ex.name}</span>
                   <span className="f-num text-2xs block truncate" style={{ color: C.dim }}>{setsLine(ex)}</span>
                 </span>
-                {ex.tags?.length > 0 && <span className="f-body text-2xs shrink-0" style={{ color: ex.tags.includes("pain") ? C.redText : C.mustard }}>{tagLine(ex.tags)}</span>}
+                {allTags(ex).length > 0 && <span className="f-body text-2xs shrink-0" style={{ color: allTags(ex).includes("pain") ? C.redText : C.mustard }}>{tagLine(allTags(ex))}</span>}
               </button>
             </div>
           );
@@ -1190,8 +1258,8 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
                   <div className="f-num text-2xs truncate" style={{ color: C.dim }}>
                     {prev ? `${setsLine(prev.ex)} · ` : ""}отдых {fmtRest(restFor(ex.name, restOverrides))}
                   </div>
-                  {ex.tags?.length > 0 && (
-                    <div className="f-body text-2xs" style={{ color: ex.tags.includes("pain") ? C.redText : C.mustard }}>{tagLine(ex.tags)}</div>
+                  {allTags(ex).length > 0 && (
+                    <div className="f-body text-2xs" style={{ color: allTags(ex).includes("pain") ? C.redText : C.mustard }}>{tagLine(allTags(ex))}</div>
                   )}
                 </div>
                 <button onClick={() => setSheet(i)} aria-label={`«${ex.name}»: метки, техника, убрать`} className="shrink-0 flex items-center justify-center">
@@ -1201,7 +1269,8 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
               <div className="space-y-1.5">
                 {ex.sets.map((s, j) => (
                   <div key={j} className="flex items-center gap-2">
-                    <span className="f-num text-xs w-3" style={{ color: C.dim }}>{j + 1}</span>
+                    <SetNo index={j} exName={ex.name} tags={setTags(ex, j)}
+                      onOpen={() => setTagFor({ ex: i, set: j })} />
                     {/* Отмеченный, но пустой подход подсвечиваем сразу: он
                         не сохранится, и узнать об этом надо не в журнале. */}
                     <input type="number" inputMode="numeric" placeholder="повт"
@@ -1287,13 +1356,32 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
         </Sheet>
       )}
 
+      {/* Метки одного подхода. Тот же выбор, что и для упражнения, — разница
+          только в том, к чему он прикладывается. */}
+      {tagFor && session.exercises[tagFor.ex] && (
+        <Sheet onClose={() => setTagFor(null)}>
+          <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>
+            Подход {tagFor.set + 1}
+          </div>
+          <div className="f-body text-xs mb-3" style={{ color: C.dim }}>
+            {session.exercises[tagFor.ex].name} · как прошёл именно этот подход
+          </div>
+          <TagPicker tags={setTags(session.exercises[tagFor.ex], tagFor.set)}
+            onToggle={(id) => toggleSetTag(tagFor.ex, tagFor.set, id)} />
+          <button onClick={() => setTagFor(null)} className="f-body w-full mt-3 py-3 text-sm" style={{ color: C.dim }}>Готово</button>
+        </Sheet>
+      )}
+
       {/* Всё, что не «ввести подход», живёт здесь: метки, техника, удаление.
           В карточке остаётся только то, ради чего в неё смотрят. */}
       {sheet !== null && session.exercises[sheet] && (
         <Sheet onClose={() => setSheet(null)}>
           <div className="f-display text-base font-semibold mb-3" style={{ color: C.chalk }}>{session.exercises[sheet].name}</div>
           <div className="f-body text-xs mb-2" style={{ color: C.dim }}>Как прошло</div>
-          <TagPicker tags={session.exercises[sheet].tags} onToggle={(id) => toggleTag(sheet, id)} />
+          {/* Быстрый путь: одно касание кладёт метку на все подходы сразу.
+              Точечно — через номер подхода в самой карточке. */}
+          <div className="f-body text-2xs mb-1.5" style={{ color: C.dim }}>Ставится на все подходы</div>
+          <TagPicker tags={commonTags(session.exercises[sheet])} onToggle={(id) => toggleTag(sheet, id)} />
           {/* Долгое нажатие есть не у всех — кому оно не даётся, переставит
               кнопками. То же решение, что и в редакторе дней. */}
           <div className="f-body text-xs mt-4 mb-2" style={{ color: C.dim }}>Порядок в тренировке</div>
@@ -1743,6 +1831,8 @@ function BaseTab({ days, setDays, initialView, conditions, gear, setGear, profil
  */
 function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [], isNew = false, bodyAt, gear }) {
   const [adding, setAdding] = useState(false);
+  /* Какой подход помечаем: {упражнение, подход}. */
+  const [tagFor, setTagFor] = useState(null);
   /* работаем на копии — «Отмена» должна оставлять запись нетронутой */
   const [draft, setDraft] = useState(() => ({
     ...workout,
@@ -1771,11 +1861,26 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
     return { ...d, exercises: ex };
   });
   const rmExercise = (i) => setDraft((d) => ({ ...d, exercises: d.exercises.filter((_, k) => k !== i) }));
+  /* Метка на одном подходе — и перевод упражнения на подходные метки,
+     если оно ещё жило по-старому. */
+  const toggleSetTag = (i, j, id) => setDraft((d) => {
+    const list = [...d.exercises];
+    list[i] = withSetTags(list[i]);
+    const sets = [...list[i].sets];
+    const cur = sets[j].tags || [];
+    sets[j] = { ...sets[j], tags: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] };
+    list[i] = { ...list[i], sets };
+    return { ...d, exercises: list };
+  });
   const toggleTag = (i, id) => setDraft((d) => {
-    const ex = [...d.exercises];
-    const cur = ex[i].tags || [];
-    ex[i] = { ...ex[i], tags: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] };
-    return { ...d, exercises: ex };
+    const list = [...d.exercises];
+    const ex = withSetTags(list[i]);
+    const on = ex.sets.every((set) => (set.tags || []).includes(id));
+    list[i] = { ...ex, sets: ex.sets.map((set) => {
+      const cur = set.tags || [];
+      return { ...set, tags: on ? cur.filter((x) => x !== id) : cur.includes(id) ? cur : [...cur, id] };
+    }) };
+    return { ...d, exercises: list };
   });
   const addExercise = (n) =>
     setDraft((d) => (d.exercises.some((e) => e.name === n) ? d : { ...d, exercises: [...d.exercises, draftExercise(n, workouts)] }));
@@ -1787,7 +1892,8 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
         ...e,
         sets: e.sets
           .filter((s) => s.reps !== "" && s.reps != null && (e.bodyweight || (s.weight !== "" && s.weight != null)))
-          .map((s) => ({ reps: +s.reps, weight: setWeight(e, s) })),
+          /* метки подхода едут вместе с ним: без них он теряет половину смысла */
+        .map((s) => ({ reps: +s.reps, weight: setWeight(e, s), tags: s.tags?.length ? s.tags : undefined })),
       }))
       .filter((e) => e.sets.length);
     onSave({ ...draft, exercises });
@@ -1830,7 +1936,8 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
             <div className="space-y-1.5">
               {ex.sets.map((s, j) => (
                 <div key={j} className="flex items-center gap-2">
-                  <span className="f-num text-xs w-3" style={{ color: C.dim }}>{j + 1}</span>
+                  <SetNo index={j} exName={ex.name} tags={setTags(ex, j)}
+                    onOpen={() => setTagFor({ ex: i, set: j })} />
                   <input type="number" inputMode="numeric" value={s.reps ?? ""} onChange={(e) => updSet(i, j, "reps", e.target.value)} placeholder="повт" aria-label={`${ex.name}, подход ${j + 1}: повторения`} className="f-num flex-1 rounded-lg px-2 py-1.5 text-sm text-center min-w-0" style={inp} />
                   <span className="f-body text-xs" aria-hidden="true" style={{ color: C.dim }}>{ex.bodyweight ? "+" : "×"}</span>
                   <input type="number" inputMode="decimal" value={s.weight ?? ""} onChange={(e) => updSet(i, j, "weight", e.target.value)}
@@ -1844,7 +1951,7 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
               ))}
             </div>
             <button onClick={() => addSet(i)} className="f-body mt-2 text-xs" style={{ color: C.mossText }}>+ подход</button>
-            <TagBlock tags={ex.tags} onToggle={(id) => toggleTag(i, id)} />
+            <TagBlock tags={commonTags(ex)} onToggle={(id) => toggleTag(i, id)} />
           </div>
         ))}
         {!draft.exercises.length && (
@@ -1878,6 +1985,19 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
           onPick={addExercise}
           onClose={() => setAdding(false)}
         />
+      )}
+      {/* Метки одного подхода — здесь их и ставят: в журнале есть время
+          подумать, чего в зале посреди подхода нет. */}
+      {tagFor && draft.exercises[tagFor.ex] && (
+        <Sheet onClose={() => setTagFor(null)}>
+          <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>Подход {tagFor.set + 1}</div>
+          <div className="f-body text-xs mb-3" style={{ color: C.dim }}>
+            {draft.exercises[tagFor.ex].name} · как прошёл именно этот подход
+          </div>
+          <TagPicker tags={setTags(draft.exercises[tagFor.ex], tagFor.set)}
+            onToggle={(id) => toggleSetTag(tagFor.ex, tagFor.set, id)} />
+          <button onClick={() => setTagFor(null)} className="f-body w-full mt-3 py-3 text-sm" style={{ color: C.dim }}>Готово</button>
+        </Sheet>
       )}
     </Sheet>
   );
@@ -1914,7 +2034,7 @@ function WorkoutCard({ w, isPR, onDelete, onEdit, bodyAt }) {
             <div key={i} className="flex items-start justify-between gap-3 text-xs f-body py-1.5" style={{ borderTop: `1px solid ${C.line}` }}>
               <span className="min-w-0" style={{ color: C.chalk }}>
                 {ex.name}{ex.uni && <UniTag />}{ex.pair && <PairTag />}
-                {ex.tags?.length > 0 && <span className="f-body block text-2xs" style={{ color: ex.tags.includes("pain") ? C.redText : C.mustard }}>{tagLine(ex.tags)}</span>}
+                {allTags(ex).length > 0 && <span className="f-body block text-2xs" style={{ color: allTags(ex).includes("pain") ? C.redText : C.mustard }}>{tagLine(allTags(ex))}</span>}
               </span>
               <span className="f-num text-right shrink-0" style={{ color: C.dim }}>
                 {ex.sets.map((s) => (ex.bodyweight ? (+s.weight ? `${s.reps}+${s.weight}` : s.reps) : `${s.reps}×${s.weight}`)).join(" · ")}
@@ -2369,10 +2489,10 @@ function ProgressTab({ workouts, bodyAt, metrics, bmr, restOverrides }) {
         if (!heavy) return;
         const cur = map[ex.name] || (map[ex.name] = { name: ex.name, bw });
         if (!cur.heavy || heavy.kg > cur.heavy.kg || (heavy.kg === cur.heavy.kg && heavy.reps > cur.heavy.reps)) {
-          cur.heavy = { ...heavy, date: w.date, rm: est1RM(ex), doubt: rmDoubtful(ex), tags: ex.tags };
+          cur.heavy = { ...heavy, date: w.date, rm: est1RM(ex), doubt: rmDoubtful(ex), tags: allTags(ex) };
         }
         if (!cur.most || most.reps > cur.most.reps || (most.reps === cur.most.reps && most.kg > cur.most.kg)) {
-          cur.most = { ...most, date: w.date, tags: ex.tags };
+          cur.most = { ...most, date: w.date, tags: allTags(ex) };
         }
       });
     });
@@ -3018,7 +3138,7 @@ export default function App() {
         const rm = est1RM(ex);
         const own = ex.bodyweight ? bwKg(ex.name, bodyAt(w.date)) : null;
         const how = [ex.uni && "каждой стороной", ex.pair && "вес одной гантели"].filter(Boolean).join(", ");
-        const marks = tagLine(ex.tags);
+        const marks = tagLine(allTags(ex));
         /* Знак вопроса у максимума, взятого корпусом или на половине
            амплитуды: формула этого не видит, а человек, читающий выгрузку,
            должен. */

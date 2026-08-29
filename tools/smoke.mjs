@@ -251,6 +251,31 @@ for (const j of [2, 3]) {
 }
 await page.waitForTimeout(300);
 
+/* Метка на одном подходе: цифра номера и есть кнопка. Новых элементов
+   на экране ноль — цифра и раньше там стояла, просто ничего не делала. */
+const setNo = (j) => page.getByRole("button", { name: new RegExp(`подход ${j}: метки`) }).first();
+ok(await setNo(2).isVisible(), "номер подхода — кнопка меток");
+const noBox = await setNo(2).boundingBox();
+ok(noBox.width >= 44 && noBox.height >= 44, "в неё можно попасть пальцем", `${Math.round(noBox.width)}×${Math.round(noBox.height)}`);
+await setNo(2).click();
+await page.waitForTimeout(500);
+ok(await page.getByText("как прошёл именно этот подход").isVisible(), "лист относится к одному подходу");
+await page.getByRole("button", { name: "дроп-сет", exact: true }).click();
+await page.waitForTimeout(300);
+await page.getByRole("button", { name: "Готово", exact: true }).click();
+await page.waitForTimeout(400);
+const noLabel = await setNo(2).getAttribute("aria-label");
+ok(/дроп-сет/.test(noLabel), "помеченный подход виден по своему номеру", noLabel);
+/* соседний подход её не получил — в этом и был смысл */
+ok(!/дроп-сет/.test(await setNo(1).getAttribute("aria-label")), "метка не расползлась на соседние подходы");
+/* и снимаем — иначе метка уедет в проверки ниже */
+await setNo(2).click();
+await page.waitForTimeout(400);
+await page.getByRole("button", { name: "дроп-сет", exact: true }).click();
+await page.waitForTimeout(300);
+await page.getByRole("button", { name: "Готово", exact: true }).click();
+await page.waitForTimeout(400);
+
 await page.getByRole("button", { name: /Завершить и сохранить/ }).first().click();
 await page.waitForTimeout(1200);
 
@@ -270,7 +295,13 @@ ok(saved?.[0]?.exercises?.[0]?.sets?.length === 3, "дописанные под�
    и меткам, и в записи никаких замеров оставаться не должно. */
 ok(saved?.[0]?.exercises?.every((e) => e.sets.every((x) => x.sec === undefined)),
   "в записи нет замеров — время считается по темпу");
-ok(JSON.stringify(saved?.[0]?.exercises?.[0]?.tags) === '["fail","pain"]', "метки сохранены", JSON.stringify(saved?.[0]?.exercises?.[0]?.tags));
+/* Метки теперь живут на подходах, а лист упражнения кладёт их сразу
+   на все — быстрый путь остался, но сохраняется точнее. */
+const savedSets = saved?.[0]?.exercises?.[0]?.sets || [];
+ok(savedSets.every((x) => JSON.stringify(x.tags) === '["fail","pain"]'),
+  "метки с листа упражнения легли на все подходы", JSON.stringify(savedSets.map((x) => x.tags)));
+ok(saved?.[0]?.exercises?.[0]?.tags === undefined,
+  "общая метка на упражнении больше не пишется — она разложена по подходам");
 /* Две гантели: в поле веса одна, тоннаж считается за обе. */
 ok(saved?.[0]?.exercises?.[0]?.pair === true, "жим гантелей помечен парным");
 const pairCard = page.locator("div.rounded-xl").filter({ hasText: "Грудь + Бицепс" }).first();
