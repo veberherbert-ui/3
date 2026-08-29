@@ -162,6 +162,20 @@ Object.keys(BW_SHARE).forEach((name) => {
   const pair = { name: "тест", pair: true, sets: [set] };
   if (energy.secOfSet(set, pair) !== energy.secOfSet(set, plain))
     fail("подсчёт", "две гантели работают одновременно — время удваивать не нужно");
+
+  /* Метки говорят о подходе то, чего не видно по числу повторений. */
+  const drop = { name: "тест", tags: ["drop"], sets: [set] };
+  if (energy.secOfSet(set, drop) <= energy.secOfSet(set, plain))
+    fail("подсчёт", "дроп-сет длится дольше обычного подхода");
+  const many = { name: "тест", tags: ["drop", "fail", "partial"], sets: [set] };
+  if (energy.secOfSet(set, many) !== energy.secOfSet(set, drop))
+    fail("подсчёт", "множители меток не перемножаются — берётся наибольший");
+  if (energy.secOfSet(timed, drop) !== 44)
+    fail("подсчёт", "замер секундомером метки не растягивают — он уже про то, что было");
+  /* Читинг и «был запас» — про скорость, а не про длительность. */
+  const easy = { name: "тест", tags: ["easy", "cheat"], sets: [set] };
+  if (energy.secOfSet(set, easy) !== energy.secOfSet(set, plain))
+    fail("подсчёт", "читинг и «был запас» время подхода не меняют");
 }
 
 /* ---- планка браузера ---- */

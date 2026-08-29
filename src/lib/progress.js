@@ -46,9 +46,19 @@ export function summary(workouts, days, bodyAt) {
 
 /* Рабочий вес упражнения в одной тренировке. Своим весом без утяжеления
    прогресс идёт повторениями — тогда сравниваем их. */
-const workValue = (ex) => {
-  const w = topWeight(ex);
-  return w != null ? { v: w, unit: "кг" } : { v: topReps(ex), unit: "повт" };
+/* Чем мерить рост упражнения.
+
+   Раньше это был верхний вес подхода — и он врал ровно там, где человек
+   работает осмысленно. Снизил вес, чтобы прибавить в объёме: подходов
+   стало больше, повторений больше, работы больше — а дневник пишет
+   «просело». Тоннаж отвечает на тот же вопрос честнее, потому что видит
+   и вес, и повторения, и число подходов сразу.
+
+   Где тоннажа нет — планка, вис, всё, что меряется секундами, — остаются
+   повторения: складывать секунды удержания в килограммы бессмысленно. */
+const workValue = (ex, bodyKg) => {
+  const t = exTonnage(ex, bodyKg);
+  return t > 0 ? { v: Math.round(t), unit: "кг" } : { v: topReps(ex), unit: "повт" };
 };
 
 /**
@@ -62,10 +72,10 @@ export function movers(workouts, days, bodyAt) {
   [...workouts].sort((a, b) => a.date.localeCompare(b.date)).forEach((w) => {
     w.exercises.forEach((ex) => {
       if (!ex.sets.length) return;
-      const { v, unit } = workValue(ex);
+      const { v, unit } = workValue(ex, bodyAt?.(w.date));
       if (!v) return;
       if (!byName.has(ex.name)) byName.set(ex.name, { name: ex.name, unit, points: [] });
-      byName.get(ex.name).points.push({ date: w.date, v, tonnage: exTonnage(ex, bodyAt?.(w.date)), e1rm: est1RM(ex) });
+      byName.get(ex.name).points.push({ date: w.date, v, tonnage: exTonnage(ex, bodyAt?.(w.date)), e1rm: est1RM(ex), top: topWeight(ex) });
     });
   });
 
@@ -178,7 +188,7 @@ export function compare(a, b, { metrics, bmr, restOverrides, bodyAt } = {}) {
       was: line(ea),
       now: line(eb),
       kind: !ea ? "new" : !eb ? "gone" : "both",
-      dw: ea && eb ? r1(workValue(eb).v - workValue(ea).v) : 0,
+      dw: ea && eb ? r1((topWeight(eb) || 0) - (topWeight(ea) || 0)) : 0,
       dr: ea && eb ? eb.sets.reduce((n2, s) => n2 + (+s.reps || 0), 0) - ea.sets.reduce((n2, s) => n2 + (+s.reps || 0), 0) : 0,
       unit: (eb || ea) ? workValue(eb || ea).unit : "кг",
     });

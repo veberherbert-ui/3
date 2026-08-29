@@ -2381,17 +2381,50 @@ function ProgressTab({ workouts, bodyAt, metrics, bmr, restOverrides }) {
   const weeks = useMemo(() => weeklyVolume(workouts, 8), [workouts]);
   const week = useMemo(() => muscleWeek(workouts), [workouts]);
 
+  /* Рекорды двух родов, потому что одним числом их не выразить.
+
+     Раньше считался только самый тяжёлый вес — и девятнадцать повторений
+     с гантелями по 24 не попадали никуда, хотя двадцать четыре килограмма
+     человек поднимал и раньше, а девятнадцать раз — впервые. Формулы 1ПМ
+     тут тоже не спасают: выше пятнадцати повторений они врут, и подход
+     в них просто не входит.
+
+     Поэтому храним оба: самый тяжёлый подход и подход с наибольшим числом
+     повторений. Совпали — показываем одну строку. */
   const records = useMemo(() => {
     const map = {};
     [...workouts].sort((a, b) => a.date.localeCompare(b.date)).forEach((w) => {
       w.exercises.forEach((ex) => {
-        const v = ex.bodyweight && !addedKg(ex) ? topReps(ex) : topWeight(ex);
-        if (v == null) return;
-        const cur = map[ex.name];
-        if (!cur || v > cur.v) map[ex.name] = { name: ex.name, v, date: w.date, bw: ex.bodyweight && !addedKg(ex), rm: est1RM(ex) };
+        const bw = ex.bodyweight && !addedKg(ex);
+        /* лучший подход по весу, а при равном весе — по повторениям */
+        let heavy = null;
+        let most = null;
+        ex.sets.forEach((set) => {
+          const kg = bw ? 0 : +set.weight || 0;
+          const reps = +set.reps || 0;
+          if (!reps) return;
+          if (!heavy || kg > heavy.kg || (kg === heavy.kg && reps > heavy.reps)) heavy = { kg, reps };
+          if (!most || reps > most.reps || (reps === most.reps && kg > most.kg)) most = { kg, reps };
+        });
+        if (!heavy) return;
+        const cur = map[ex.name] || (map[ex.name] = { name: ex.name, bw });
+        if (!cur.heavy || heavy.kg > cur.heavy.kg || (heavy.kg === cur.heavy.kg && heavy.reps > cur.heavy.reps)) {
+          cur.heavy = { ...heavy, date: w.date, rm: est1RM(ex) };
+        }
+        if (!cur.most || most.reps > cur.most.reps || (most.reps === cur.most.reps && most.kg > cur.most.kg)) {
+          cur.most = { ...most, date: w.date };
+        }
       });
     });
-    return Object.values(map).sort((a, b) => b.date.localeCompare(a.date));
+    return Object.values(map)
+      .map((r) => ({
+        ...r,
+        /* «больше всего повторений» показываем, только когда это другой
+           подход: иначе строка дублирует сама себя */
+        same: r.heavy.kg === r.most.kg && r.heavy.reps === r.most.reps,
+      }))
+      .sort((a, b) => (b.heavy.date > b.most.date ? b.heavy.date : b.most.date)
+        .localeCompare(a.heavy.date > a.most.date ? a.heavy.date : a.most.date));
   }, [workouts]);
 
   if (!workouts.length) return <div className="f-body text-sm text-center py-20 px-4" style={{ color: C.dim }}>Графики появятся после первой записанной тренировки.</div>;
@@ -2419,7 +2452,9 @@ function ProgressTab({ workouts, bodyAt, metrics, bmr, restOverrides }) {
       <div>
         <div className="f-display text-sm font-semibold mb-1" style={{ color: C.chalk }}>Что растёт, что стоит</div>
         <div className="f-body text-xs mb-2" style={{ color: C.dim }}>
-          Сверху то, что требует решения. Нажатие раскрывает график упражнения.
+          Считается тоннаж за тренировку, а не верхний вес: снизил вес ради
+          объёма — работы стало больше, и это видно. Сверху то, что требует
+          решения. Нажатие раскрывает график упражнения.
         </div>
         <div className="space-y-1.5">
           {!rows.length && <div className="f-body text-sm text-center py-8" style={{ color: C.dim }}>Нет данных за период.</div>}
@@ -2486,15 +2521,31 @@ function ProgressTab({ workouts, bodyAt, metrics, bmr, restOverrides }) {
         <div className="space-y-1.5">
           {!records.length && <div className="f-body text-sm text-center py-8" style={{ color: C.dim }}>Рекордов пока нет.</div>}
           {records.slice(0, 12).map((r) => (
-            <div key={r.name} className="flex items-center justify-between gap-3 rounded-xl px-3 py-2.5" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
-              <div className="min-w-0">
-                <div className="f-body text-xs truncate" style={{ color: C.chalk }}>{r.name}</div>
-                <div className="f-body text-2xs" style={{ color: C.dim }}>{fmtDate(r.date)}{EXDB[r.name] ? ` · ${EXDB[r.name].m}` : ""}</div>
+            <div key={r.name} className="rounded-xl px-3 py-2.5" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+              <div className="f-body text-xs truncate" style={{ color: C.chalk }}>{r.name}</div>
+              <div className="f-body text-2xs mb-1.5" style={{ color: C.dim }}>{EXDB[r.name]?.m || "своё упражнение"}</div>
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="f-body text-2xs" style={{ color: C.dim }}>{r.bw ? "больше всего повторений" : "тяжелее всего"}</span>
+                <span className="text-right shrink-0">
+                  <span className="f-num text-sm font-semibold" style={{ color: C.mustard }}>
+                    {r.bw ? `${r.heavy.reps} повт` : `${r.heavy.reps}×${r.heavy.kg}`}
+                  </span>
+                  <span className="f-num text-2xs ml-2" style={{ color: C.dim }}>
+                    {fmtDate(r.heavy.date)}{!r.bw && r.heavy.rm ? ` · 1ПМ ~${r.heavy.rm}` : ""}
+                  </span>
+                </span>
               </div>
-              <div className="text-right shrink-0">
-                <div className="f-num text-sm font-semibold" style={{ color: C.mustard }}>{r.bw ? `${r.v} повт` : `${r.v} кг`}</div>
-                {!r.bw && r.rm && <div className="f-num text-2xs" style={{ color: C.dim }}>1ПМ ~{r.rm}</div>}
-              </div>
+              {/* Повторения — отдельный рекорд, а не второй сорт: девятнадцать
+                  раз с рабочим весом формулы 1ПМ вообще не видят. */}
+              {!r.bw && !r.same && (
+                <div className="flex items-baseline justify-between gap-3 mt-0.5">
+                  <span className="f-body text-2xs" style={{ color: C.dim }}>больше всего повторений</span>
+                  <span className="text-right shrink-0">
+                    <span className="f-num text-sm font-semibold" style={{ color: C.mossText }}>{r.most.reps}×{r.most.kg}</span>
+                    <span className="f-num text-2xs ml-2" style={{ color: C.dim }}>{fmtDate(r.most.date)}</span>
+                  </span>
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -2631,7 +2682,7 @@ function WorkoutEnergyCard({ workouts, metrics, bmr, restOverrides }) {
                 energy.measured >= 0.5
                   ? `по секундомеру подходов${energy.measured < 1 ? " (часть оценена)" : ""}`
                   : "оценка по темпу, около трёх секунд на повторение"
-              }${energy.uniEstimate ? " · одной рукой считается за две стороны" : ""}`} />
+              }${energy.uniEstimate ? " · одной рукой считается за две стороны" : ""}${energy.tagged ? " · дроп-сеты и отказ считаются дольше" : ""}`} />
             <CalcLine k="Вес тела" v={`${energy.bodyKg} кг`} hint={`замер ${fmtDate(energy.weightDate)}`} />
             <CalcLine k="Всего" v={`${energy.gross} ккал`}
               hint={`${met} × 3,5 × ${energy.bodyKg} ÷ 200 × ${energy.minutes}`} />

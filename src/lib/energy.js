@@ -14,14 +14,39 @@ import { weightNear } from "./calc.js";
    Поэтому здесь показывается не только итог, но и весь ход расчёта —
    видно, откуда взялась каждая цифра, и с чем спорить. */
 
-/** Темп: около трёх секунд на повторение, но подход не бывает мгновенным. */
+/* Темп: подконтрольное повторение — это примерно две секунды вверх и две
+   вниз. Раньше здесь стояло три секунды на всё повторение, и это оказалось
+   заметно быстрее, чем люди в самом деле работают: тренировка из
+   восемнадцати подходов давала двенадцать минут под нагрузкой вместо
+   восемнадцати, а от этого зависит и плотность, и уровень МЕТ,
+   и весь расход. */
 const WORK_MIN_SEC = 20;
-const WORK_MAX_SEC = 90;
-const SEC_PER_REP = 3;
+const WORK_MAX_SEC = 120;
+const SEC_PER_REP = 4;
 
-export function setWorkSec(reps) {
+/* Метки говорят о подходе то, чего не видно по числу повторений.
+   Дроп-сет — это подход, продолженный на меньшем весе, он и длится дольше
+   всех. Отказ добавляет вязкие последние повторения, пауза — саму паузу.
+   Читинг и «был запас», наоборот, про скорость, а не про длительность,
+   и время не меняют. Множители не перемножаются: берётся наибольший,
+   иначе три метки на одном подходе давали бы вдвое больше правды,
+   чем в нём есть. */
+const TAG_SEC = { drop: 1.6, pause: 1.25, fail: 1.15, partial: 0.85 };
+
+export const tagFactor = (tags) => {
+  if (!tags?.length) return 1;
+  const known = tags.map((t) => TAG_SEC[t]).filter(Boolean);
+  if (!known.length) return 1;
+  /* растягивающие важнее укорачивающих: если подход и до отказа, и с
+     частичными — это всё-таки долгий подход */
+  const up = known.filter((x) => x > 1);
+  return up.length ? Math.max(...up) : Math.min(...known);
+};
+
+export function setWorkSec(reps, tags) {
   const r = +reps || 0;
-  return Math.min(WORK_MAX_SEC, Math.max(WORK_MIN_SEC, Math.round(r * SEC_PER_REP)));
+  const base = Math.min(WORK_MAX_SEC, Math.max(WORK_MIN_SEC, Math.round(r * SEC_PER_REP)));
+  return Math.round(base * tagFactor(tags));
 }
 
 /* Время подхода: замеренное секундомером, если его включали, иначе оценка
@@ -33,7 +58,7 @@ export function setWorkSec(reps) {
    подъёмов на каждую икру это две минуты под нагрузкой, а не одна. Замер
    не трогаем: секундомер шёл через обе стороны и уже знает правду. */
 export const secOfSet = (set, ex) =>
-  +set.sec > 0 ? +set.sec : setWorkSec(set.reps) * (ex?.uni ? 2 : 1);
+  +set.sec > 0 ? +set.sec : setWorkSec(set.reps, ex?.tags) * (ex?.uni ? 2 : 1);
 
 /** Сколько всего секунд под нагрузкой — сумма по всем подходам. */
 export function workSecondsOf(workout) {
@@ -47,6 +72,13 @@ export function measuredShare(workout) {
   let all = 0, timed = 0;
   for (const ex of workout.exercises || []) for (const set of ex.sets || []) { all++; if (+set.sec > 0) timed++; }
   return all ? timed / all : 0;
+}
+
+/** Есть ли оценённые подходы с метками, растягивающими время. */
+export function hasTagged(workout) {
+  for (const ex of workout.exercises || [])
+    if (tagFactor(ex.tags) !== 1) for (const set of ex.sets || []) if (!(+set.sec > 0)) return true;
+  return false;
 }
 
 /** Есть ли в тренировке оценённые подходы одной рукой — их время удвоено,
@@ -126,7 +158,7 @@ export function workoutEnergy(workout, { metrics, bmr, restOverrides } = {}) {
 
   return {
     minutes, source, workMin: Math.round(workSec / 60), measured: measuredShare(workout),
-    uniEstimate: hasUniEstimate(workout), density, level,
+    uniEstimate: hasUniEstimate(workout), tagged: hasTagged(workout), density, level,
     gross, rest, net: Math.max(0, gross - rest), bodyKg: w.kg, weightDate: w.date,
   };
 }
