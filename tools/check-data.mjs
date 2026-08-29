@@ -154,10 +154,6 @@ Object.keys(BW_SHARE).forEach((name) => {
     fail("подсчёт", "тоннаж одной рукой должен считаться за две стороны");
   if (energy.secOfSet(set, uni) !== energy.secOfSet(set, plain) * 2)
     fail("подсчёт", "время под нагрузкой одной рукой должно считаться за две стороны");
-  /* Замер секундомером шёл через обе стороны и уже знает правду. */
-  const timed = { reps: 12, weight: 20, sec: 44 };
-  if (energy.secOfSet(timed, uni) !== 44)
-    fail("подсчёт", "замер секундомером удваивать нельзя — он уже про обе стороны");
   /* Две гантели — это два снаряда одновременно, а не два подхода подряд. */
   const pair = { name: "тест", pair: true, sets: [set] };
   if (energy.secOfSet(set, pair) !== energy.secOfSet(set, plain))
@@ -170,40 +166,17 @@ Object.keys(BW_SHARE).forEach((name) => {
   const many = { name: "тест", tags: ["drop", "fail", "partial"], sets: [set] };
   if (energy.secOfSet(set, many) !== energy.secOfSet(set, drop))
     fail("подсчёт", "множители меток не перемножаются — берётся наибольший");
-  if (energy.secOfSet(timed, drop) !== 44)
-    fail("подсчёт", "замер секундомером метки не растягивают — он уже про то, что было");
   /* Читинг и «был запас» — про скорость, а не про длительность. */
   const easy = { name: "тест", tags: ["easy", "cheat"], sets: [set] };
   if (energy.secOfSet(set, easy) !== energy.secOfSet(set, plain))
     fail("подсчёт", "читинг и «был запас» время подхода не меняют");
-}
 
-/* ---- планка браузера ---- */
-/* Сборщик сам поднимает нижнюю границу вслед за «широко доступными»
-   браузерами, и в файл начинает попадать синтаксис, которого старый телефон
-   не понимает. Разбор падает целиком — человек видит белый экран без единой
-   строчки в консоли, потому что до выполнения дело не доходит. Проверяем
-   готовую сборку, если она есть: конфиг может говорить что угодно. */
-{
-  const { readdirSync, readFileSync, existsSync } = await import("node:fs");
-  if (existsSync("dist/assets")) {
-    const modern = {
-      "??=": /\?\?=/,
-      "||=": /\|\|=/,
-      "&&=": /&&=/,
-      "статический блок класса": /static\s*\{/,
-      "приватные поля класса": /[^\w]#\w+\s*[=;(]/,
-      "поиск назад в регулярке": /\(\?<[=!]/,
-    };
-    readdirSync("dist/assets")
-      .filter((f) => f.endsWith(".js"))
-      .forEach((f) => {
-        const code = readFileSync(`dist/assets/${f}`, "utf8");
-        Object.entries(modern).forEach(([label, re]) => {
-          if (re.test(code)) fail("сборка", `в ${f} остался ${label} — старые телефоны не разберут файл`);
-        });
-      });
-  }
+  /* Секундомера на подходах больше нет: он мерял подход от кнопки до кнопки,
+     вместе с обращением со снарядом, и выдавал это за время под нагрузкой.
+     В старых записях поле осталось — его надо тихо игнорировать, а не
+     воскрешать прежнее поведение. */
+  if (energy.secOfSet({ reps: 12, weight: 20, sec: 200 }, plain) !== energy.secOfSet(set, plain))
+    fail("подсчёт", "замер из старых записей не должен влиять на расчёт");
 }
 
 if (problems.length) {

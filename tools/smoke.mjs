@@ -174,18 +174,12 @@ ok(rests.length > 1 && new Set(rests).size > 1, "время отдыха раз�
 
 await page.getByPlaceholder("повт").first().fill("10");
 await page.getByPlaceholder("кг").first().fill("40");
-/* Подход теперь засекается: ▶ — начали, секундомер — идёт, второе нажатие
-   заканчивает, ставит отметку и запускает отдых. */
-await page.getByRole("button", { name: /подход 1: начать/i }).first().click();
-await page.waitForTimeout(600);
-ok(await page.getByRole("button", { name: /подход 1: идёт/i }).first().isVisible(), "подход засекается секундомером");
-ok(await page.evaluate(() => window.__mediaPlays) === 0, "старт подхода не перехватывает звук — музыка в наушниках играет дальше",
-  `запусков медиаэлемента: ${await page.evaluate(() => window.__mediaPlays)}`);
-
-await page.waitForTimeout(5600);
-await page.getByRole("button", { name: /подход 1: идёт/i }).first().click();
-await page.waitForTimeout(900);
-ok(await page.getByRole("button", { name: /подход 1: снять отметку/i }).first().isVisible(), "после остановки подход отмечен");
+/* Подход отмечается галочкой и запускает отдых. Здесь стоял секундомер
+   на каждый подход — он мерял от кнопки до кнопки, вместе с тем, как взял
+   и положил снаряд, и выдавал это за время под нагрузкой. */
+await page.getByRole("button", { name: /подход 1: отметить сделанным/i }).first().click();
+await page.waitForTimeout(700);
+ok(await page.getByRole("button", { name: /подход 1: снять отметку/i }).first().isVisible(), "подход отмечается одним нажатием");
 
 const restBig = await page.locator(".f-num.text-4xl").first().textContent().catch(() => null);
 ok(!!restBig, "полоса отдыха с крупным счётчиком", restBig || "");
@@ -210,60 +204,24 @@ await page.waitForTimeout(400);
 
 /* Отработанное упражнение складывается в строку: в середине тренировки
    половина списка уже сделана, и держать под ней пустые поля незачем. */
-/* Второй подход заканчиваем не своей кнопкой, а полосой сверху: часы больше
-   не уезжают вместе со списком, и до конца отдыха не надо мотать обратно. */
+/* Полоса отдыха не уезжает вверх вместе со списком. */
 const panel = page.locator("#tabpanel");
-await page.getByRole("button", { name: /подход 2: начать/i }).first().click();
-await page.waitForTimeout(400);
-const doneBtn = page.getByRole("button", { name: "Готово", exact: true });
-ok(await doneBtn.isVisible(), "у идущего подхода есть своя полоса с крупным счётчиком");
+await page.getByRole("button", { name: /подход 2: отметить сделанным/i }).first().click();
+await page.waitForTimeout(600);
 await panel.evaluate((el) => el.scrollBy(0, 600));
 await page.waitForTimeout(600);
-const runBox = await doneBtn.boundingBox();
-ok(!!runBox && runBox.y < 120, "полоса подхода остаётся сверху при прокрутке", `y = ${Math.round(runBox?.y ?? -1)}`);
-/* Прилипнув, полоса сжимается до строки — иначе она съедает пол-экрана. */
-const runTall = await page.locator("div:has(> button:text-is('Готово'))").last().boundingBox();
-ok(!!runTall && runTall.height < 70, "висящая полоса сжата до строки", `${Math.round(runTall?.height ?? -1)}px`);
-await doneBtn.click();
-await page.waitForTimeout(700);
-ok(await page.getByRole("button", { name: /подход 2: снять отметку/i }).first().isVisible(), "подход, законченный с полосы, отмечен");
 const skipBox = await page.getByRole("button", { name: "Пропустить", exact: true }).boundingBox();
-ok(!!skipBox && skipBox.y < 120, "полоса отдыха тоже остаётся на виду", `y = ${Math.round(skipBox?.y ?? -1)}`);
+ok(!!skipBox && skipBox.y < 120, "полоса отдыха остаётся на виду", `y = ${Math.round(skipBox?.y ?? -1)}`);
+const restTall = await page.locator("div:has(> div > button:text-is('Пропустить'))").last().boundingBox();
+ok(!!restTall && restTall.height < 80, "висящая полоса сжата до строки", `${Math.round(restTall?.height ?? -1)}px`);
 await panel.evaluate((el) => el.scrollTo(0, 0));
 await page.waitForTimeout(600);
-/* Наверху — полная карточка: ±15 правят, когда на неё смотрят. */
 ok(await page.getByRole("button", { name: "+15", exact: true }).isVisible(), "наверху полоса разворачивается обратно");
 await page.getByRole("button", { name: "Пропустить", exact: true }).click();
 await page.waitForTimeout(400);
 
-/* Подходы можно было только добавлять. Лишняя строка потом молча
-   не сохранялась — но человек об этом не знает и сидит с подходом,
-   которого не делал. */
-const setsOf = () => page.getByRole("spinbutton", { name: /Жим гантелей лёжа \(горизонт\), подход \d+: повторения/ }).count();
-await page.getByRole("button", { name: /\+ подход/ }).first().click();
+await page.getByRole("button", { name: /подход 3: отметить сделанным/i }).first().click();
 await page.waitForTimeout(400);
-const grown = await setsOf();
-ok(grown === 4, "подход добавляется", `${grown}`);
-/* последний пустой уходит сразу, без вопросов */
-await page.getByRole("button", { name: /Убрать подход 4/ }).first().click();
-await page.waitForTimeout(400);
-ok(await setsOf() === 3, "пустой подход убирается одним нажатием", `${await setsOf()}`);
-/* а вот заполненный — только с подтверждением */
-await page.getByRole("spinbutton", { name: /подход 3: повторения/ }).first().fill("9");
-await page.waitForTimeout(300);
-await page.getByRole("button", { name: /− убрать подход/ }).first().click();
-await page.waitForTimeout(400);
-ok(await page.getByText(/Убрать подход 3\?/).isVisible(), "заполненный подход просит подтверждения");
-await page.getByRole("button", { name: "Нет", exact: true }).click();
-await page.waitForTimeout(300);
-ok(await setsOf() === 3, "отказ ничего не убрал");
-await page.getByRole("spinbutton", { name: /подход 3: повторения/ }).first().fill("");
-await page.waitForTimeout(300);
-
-await page.getByRole("button", { name: /подход 3: начать/i }).first().click();
-await page.waitForTimeout(150);
-await page.getByRole("button", { name: /подход 3: идёт/i }).first().click();
-await page.waitForTimeout(250);
 await page.waitForTimeout(400);
 const firstSet = page.getByRole("spinbutton", { name: /Жим гантелей лёжа \(горизонт\), подход 1: повторения/ });
 ok(!(await firstSet.isVisible().catch(() => false)), "отработанное упражнение свёрнуто в строку");
@@ -273,7 +231,7 @@ await packedRow.click();
 await page.waitForTimeout(400);
 ok(await firstSet.isVisible(), "по нажатию раскрывается обратно");
 
-/* Подходы 2 и 3 отмечены секундомером, но повторения не вписаны. Раньше
+/* Подходы 2 и 3 отмечены, но повторения не вписаны. Раньше
    такие подходы молча выбрасывались при сохранении — человек делал подход,
    видел отметку и отдых, а в журнале его не было. Теперь приложение
    останавливается и показывает, чего не хватает. */
@@ -308,10 +266,10 @@ ok(saved?.[0]?.date === localDate, "дата локальная, а не UTC", `
 ok(saved?.[0]?.exercises?.[0]?.sets?.[0]?.weight === 40, "подход сохранён верно");
 ok(saved?.[0]?.exercises?.[0]?.sets?.length === 3, "дописанные подходы не потерялись",
   `сохранено ${saved?.[0]?.exercises?.[0]?.sets?.length} из 3`);
-/* Замер короче пяти секунд не считается замером — иначе двойное нажатие
-   «сделано» породило бы время под нагрузкой в две секунды. */
-const sec = saved?.[0]?.exercises?.[0]?.sets?.[0]?.sec;
-ok(sec >= 5 && sec < 30, "время под нагрузкой замерено, а не оценено", `${sec} сек`);
+/* Секундомера больше нет: время под нагрузкой всегда считается по темпу
+   и меткам, и в записи никаких замеров оставаться не должно. */
+ok(saved?.[0]?.exercises?.every((e) => e.sets.every((x) => x.sec === undefined)),
+  "в записи нет замеров — время считается по темпу");
 ok(JSON.stringify(saved?.[0]?.exercises?.[0]?.tags) === '["fail","pain"]', "метки сохранены", JSON.stringify(saved?.[0]?.exercises?.[0]?.tags));
 /* Две гантели: в поле веса одна, тоннаж считается за обе. */
 ok(saved?.[0]?.exercises?.[0]?.pair === true, "жим гантелей помечен парным");
@@ -480,6 +438,11 @@ const calc = await energyCard.innerText();
    собрано: длительность, доля времени под нагрузкой, вес тела. */
 for (const part of ["Длительность", "Под нагрузкой", "Вес тела", "МЕТ"])
   ok(calc.includes(part), `в разборе расчёта есть «${part.toLowerCase()}»`);
+/* Секундомер меряет подход целиком — вместе с тем, как взял и положил
+   снаряд. Под нагрузкой человек был меньше, и эти две строки не должны
+   выдаваться одна за другую. */
+ok(/не точное число, а правдоподобное/.test(calc), "сказано, что время под нагрузкой — оценка, а не замер");
+ok(/около четырёх секунд на повторение/.test(calc), "назван темп, по которому считается");
 /* Проверяем не саму цифру — она зависит от того, сколько подходов ввёл
    тест, — а темп: ккал в минуту при 82 кг должно лежать между 3,5 и 6,0 МЕТ,
    то есть примерно 5–9. Мимо этого коридора — сломана формула. */

@@ -539,42 +539,26 @@ function Elapsed({ session, doneSets, live }) {
   );
 }
 
-/* Кнопка подхода: ▶ — начать, секундомер — идёт, ✓ — сделан.
+/* Кнопка подхода: галочка, и только.
 
-   Раньше была просто галочка, и время под нагрузкой приходилось оценивать
-   по темпу — три секунды на повторение. Для подхода в отказ с паузами это
-   мимо вдвое, а от времени под нагрузкой зависит и плотность тренировки,
-   и расход калорий.
+   Здесь был секундомер — начал подход, закончил подход, — и он казался
+   честнее оценки по темпу. Оказалось наоборот: секундомер идёт от кнопки
+   до кнопки и меряет вместе с тем, как человек лёг, взял снаряд, положил
+   его и отдышался. Доля этой возни у каждого снаряда своя, так что точности
+   он не давал, а нажатие требовал на каждый подход — и однажды тихо
+   потерял два отмеченных подхода, потому что отмечал их без цифр.
 
-   Кто не хочет возиться — жмёт дважды подряд: замер короче пяти секунд
-   не считается замером, и подход просто отмечается сделанным, как раньше.
-
-   Тикает здесь, а не в SessionTab: иначе каждую секунду перерисовывались бы
-   все упражнения вместе с полями ввода, и в них терялся бы курсор. */
-const SEC_MIN_MEASURED = 5;
-
-function SetButton({ set, index, exName, running, startedAt, onStart, onStop, onToggle }) {
-  useTicker(running);
+   Время под нагрузкой теперь всегда считается по темпу и меткам подхода.
+   Это оценка, она этого и не скрывает — и в отличие от секундомера
+   не берёт денег за иллюзию. */
+function SetButton({ set, index, exName, onToggle }) {
   const done = !!set.done;
-  const elapsed = running ? Math.floor((Date.now() - startedAt) / 1000) : 0;
-  const label = done
-    ? `${exName}, подход ${index + 1}: снять отметку`
-    : running
-      ? `${exName}, подход ${index + 1}: идёт ${elapsed} секунд, закончить`
-      : `${exName}, подход ${index + 1}: начать`;
-  const bg = done ? C.moss : running ? C.mustard : C.surfaceHi;
-  const line = done ? C.moss : running ? C.mustard : C.line;
   return (
-    <button onClick={done ? onToggle : running ? onStop : onStart} aria-label={label} aria-pressed={done}
-      className="shrink-0 rounded-lg flex items-center justify-center px-1.5"
-      style={{ background: bg, border: `1px solid ${line}` }}>
-      {/* Готовый подход показывает свой замер, если он был: отдельной строки
-          «под нагрузкой» больше нет, число стоит там, где его сделали. */}
-      {done ? (+set.sec > 0
-        ? <span className="f-num text-xs font-semibold tabular-nums" style={{ color: C.chalk }}>{fmtClock(set.sec * 1000)}</span>
-        : <Check size={20} color={C.chalk} />)
-        : running ? <span className="f-num text-xs font-semibold tabular-nums" style={{ color: C.bg }}>{fmtClock(elapsed * 1000)}</span>
-          : <Play size={18} color={C.dim} />}
+    <button onClick={onToggle} aria-pressed={done}
+      aria-label={`${exName}, подход ${index + 1}: ${done ? "снять отметку" : "отметить сделанным"}`}
+      className="shrink-0 rounded-lg flex items-center justify-center"
+      style={{ background: done ? C.moss : C.surfaceHi, border: `1px solid ${done ? C.moss : C.line}`, width: 44 }}>
+      <Check size={20} color={done ? C.chalk : C.line} />
     </button>
   );
 }
@@ -631,31 +615,6 @@ function useStuck() {
     return () => io.disconnect();
   }, [mark]);
   return { ref: setMark, stuck };
-}
-
-/** Полоса идущего подхода: секундомер видно из любого места списка,
-    и закончить подход можно оттуда же, не отматывая к своей карточке. */
-function RunBar({ run, exName, onStop, compact }) {
-  useTicker(true);
-  const sec = Math.floor((Date.now() - run.at) / 1000);
-  return (
-    <div className={`rounded-xl flex items-center gap-2.5 ${compact ? "px-3 py-1.5 mb-2" : "px-3.5 py-2.5 mb-3"}`}
-      style={{ background: C.surface, border: `1px solid ${C.mustard}` }}>
-      <Timer size={compact ? 14 : 12} color={C.mustard} className="shrink-0" />
-      {!compact && (
-        <div className="min-w-0 flex-1">
-          <div className="f-body text-2xs uppercase tracking-wide" style={{ color: C.mustard }}>Подход {run.j + 1}</div>
-          <div className="f-body text-xs mt-0.5 truncate" style={{ color: C.dim }}>{exName}</div>
-        </div>
-      )}
-      <div className={`f-num font-bold leading-none tabular-nums shrink-0 ${compact ? "text-2xl" : "text-3xl"}`} style={{ color: C.mustard }}>
-        {fmtClock(sec * 1000)}
-      </div>
-      {compact && <div className="f-body text-xs truncate min-w-0 flex-1" style={{ color: C.dim }}>{exName}</div>}
-      <button onClick={onStop} className="f-body rounded-lg px-3.5 text-sm font-semibold shrink-0"
-        style={{ background: C.mustard, color: C.bg, minHeight: 44 }}>Готово</button>
-    </div>
-  );
 }
 
 /**
@@ -1004,45 +963,32 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
     const ex = [...s.exercises]; const e = { ...ex[i], sets: [...ex[i].sets] };
     e.sets[j] = { ...e.sets[j], [f]: v }; ex[i] = e; return { ...s, exercises: ex };
   });
-  /* Начали подход: секундомер живёт в самой сессии, поэтому переживает
-     сворачивание приложения. Отдых на это время убираем — он кончился. */
-  /* Идущий подход помним по имени упражнения, а не по номеру в списке:
-     список можно переставить прямо во время отсчёта, и номер уедет. */
-  const startSet = (i, j) => {
-    tapBuzz();
-    primeAudio(); /* касание пользователя — момент, когда iOS разрешает звук */
-    cancelScheduled();
-    setSession((s) => ({ ...s, rest: null, run: { name: s.exercises[i].name, j, at: Date.now() } }));
-  };
-
-  /** Отметить подход сделанным и запустить отдых. sec — замер, если он был. */
-  const finishSet = (i, j, sec) => {
+  /** Отметить подход сделанным и запустить отдых. */
+  const markDone = (i, j) => {
     const ex = session.exercises[i];
     tapBuzz();
-    primeAudio();
+    primeAudio(); /* касание пользователя — момент, когда iOS разрешает звук */
     /* Подход отмечен, а повторения не вписаны — курсор сам встаёт в поле.
        Раньше такой подход молча пропадал при сохранении. */
-    if (ex.sets[j]?.reps === "" || ex.sets[j]?.reps == null) {
+    if (blank(ex.sets[j]?.reps)) {
       setTimeout(() => fieldRefs.current[`${ex.name}:${j}:reps`]?.focus(), 60);
     }
     const total = restFor(ex.name, restOverrides);
     setSession((prev) => {
       const list = [...prev.exercises];
       const e = { ...list[i], sets: [...list[i].sets] };
-      e.sets[j] = { ...e.sets[j], done: true, sec: sec || null };
+      e.sets[j] = { ...e.sets[j], done: true };
       list[i] = e;
-      return { ...prev, exercises: list, run: null, rest: { until: Date.now() + total * 1000, total, exName: ex.name } };
+      return { ...prev, exercises: list, rest: { until: Date.now() + total * 1000, total, exName: ex.name } };
     });
   };
 
-  /* Снять отметку: замер тоже убираем, иначе он останется от подхода,
-     который решили переделать. */
   const untick = (i, j) => {
     tapBuzz();
     setSession((prev) => {
       const list = [...prev.exercises];
       const e = { ...list[i], sets: [...list[i].sets] };
-      e.sets[j] = { ...e.sets[j], done: false, sec: null };
+      e.sets[j] = { ...e.sets[j], done: false };
       list[i] = e;
       return { ...prev, exercises: list };
     });
@@ -1050,7 +996,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
   const addSet = (i) => setSession((s) => {
     const ex = [...s.exercises]; const e = { ...ex[i] };
     const last = e.sets[e.sets.length - 1] || { reps: "", weight: "" };
-    e.sets = [...e.sets, { reps: "", weight: last.weight, done: false, sec: null }]; ex[i] = e; return { ...s, exercises: ex };
+    e.sets = [...e.sets, { reps: "", weight: last.weight, done: false }]; ex[i] = e; return { ...s, exercises: ex };
   });
   /* Убрать последний подход. Добавить их можно было всегда, а убрать —
      нет: лишняя строка потом просто не сохранялась, но человек об этом
@@ -1071,10 +1017,6 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
     list[i] = { ...list[i], tags: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] };
     return { ...s, exercises: list };
   });
-  const run = session.run;
-  /* Сумма замеров по упражнению. Пока ни один подход не засекали — ноль,
-     и строка не показывается: обещать точность, которой нет, незачем. */
-  const underLoad = (ex) => ex.sets.reduce((n, s) => n + (+s.sec || 0), 0);
   /* решил доделать что-то сверх плана — добавляем прямо на ходу */
   const addExercise = (n) => setSession((s) =>
     s.exercises.some((e) => e.name === n) ? s : { ...s, exercises: [...s.exercises, blankExercise(n)] });
@@ -1101,7 +1043,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
       name: e.name, bodyweight: e.bodyweight, uni: !!e.uni, pair: !!e.pair,
       tags: e.tags?.length ? e.tags : undefined,
       sets: e.sets.filter((s) => !blank(s.reps) && (e.bodyweight || !blank(s.weight)))
-        .map((s) => ({ reps: +s.reps, weight: setWeight(e, s), sec: +s.sec > 0 ? +s.sec : undefined })),
+        .map((s) => ({ reps: +s.reps, weight: setWeight(e, s) })),
     })).filter((e) => e.sets.length);
     setMenu(false);
     if (!cleaned.length) { setSession(null); return; }
@@ -1109,19 +1051,14 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
     onFinish({ id: session.id, date: session.date, dayId: session.dayId, dayLabel: session.dayLabel, note: session.note, durationMin: Math.max(1, Math.round(ms / 60000)), exercises: cleaned });
   };
 
-  /* Идущий подход держим под рукой так же, как отдых: индекс ищем по имени,
-     потому что список можно переставить прямо во время отсчёта. */
-  const runIdx = run ? session.exercises.findIndex((e) => e.name === run.name) : -1;
-
   return (
     <div className="px-4 pt-3 pb-10">
       {/* Маячок: пока он в поле зрения, полоса ниже стоит на месте. */}
       <div ref={topMark} style={{ height: 1 }} aria-hidden="true" />
-      {/* Часы не должны уезжать вверх вместе со списком: до конца отдыха
-          приходилось прокручивать обратно, а закончить подход можно было
-          только с кнопки своего упражнения. Теперь то, что тикает, висит
-          сверху — и сжимается до строки, чтобы не занимать пол-экрана. */}
-      {(session.rest || run) && (
+      {/* Отдых не должен уезжать вверх вместе со списком: до конца
+          приходилось прокручивать обратно. Полоса висит сверху и сжимается
+          до строки, чтобы не занимать пол-экрана. */}
+      {session.rest && (
         <div style={{
           position: "sticky", top: 0, zIndex: 20, background: C.bg,
           marginLeft: -16, marginRight: -16, paddingLeft: 16, paddingRight: 16,
@@ -1130,29 +1067,17 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
           paddingTop: stuckTop ? 6 : 0, paddingBottom: stuckTop ? 4 : 0,
           boxShadow: stuckTop ? "0 10px 12px -10px rgba(0,0,0,.9)" : "none",
         }}>
-          {run && runIdx >= 0 ? (
-            <RunBar
-              run={run}
-              exName={run.name}
-              compact={stuckTop}
-              onStop={() => {
-                const sec = Math.round((Date.now() - run.at) / 1000);
-                finishSet(runIdx, run.j, sec >= SEC_MIN_MEASURED ? sec : null);
-              }}
-            />
-          ) : session.rest ? (
-            <RestBar
-              rest={session.rest}
-              muted={muted}
-              compact={stuckTop}
-              onDone={clearRest}
-              onSkip={clearRest}
-              onAdjust={(dir) => {
-                adjustRest(dir);
-                setRestOverride(session.rest.exName, stepRest(session.rest.total, dir));
-              }}
-            />
-          ) : null}
+          <RestBar
+            rest={session.rest}
+            muted={muted}
+            compact={stuckTop}
+            onDone={clearRest}
+            onSkip={clearRest}
+            onAdjust={(dir) => {
+              adjustRest(dir);
+              setRestOverride(session.rest.exName, stepRest(session.rest.total, dir));
+            }}
+          />
         </div>
       )}
 
@@ -1251,14 +1176,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
                       style={{ background: C.surfaceHi, color: s.done ? C.moss : C.chalk, border: `1px solid ${s.done && !ex.bodyweight && (s.weight === "" || s.weight == null) ? C.mustard : C.line}` }} />
                     <SetButton
                       set={s} index={j} exName={ex.name}
-                      running={run?.name === ex.name && run?.j === j}
-                      startedAt={run?.at}
-                      onStart={() => startSet(i, j)}
-                      onStop={() => {
-                        const sec = Math.round((Date.now() - run.at) / 1000);
-                        finishSet(i, j, sec >= SEC_MIN_MEASURED ? sec : null);
-                      }}
-                      onToggle={() => untick(i, j)}
+                      onToggle={() => (s.done ? untick(i, j) : markDone(i, j))}
                     />
                   </div>
                 ))}
@@ -1824,7 +1742,7 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
         ...e,
         sets: e.sets
           .filter((s) => s.reps !== "" && s.reps != null && (e.bodyweight || (s.weight !== "" && s.weight != null)))
-          .map((s) => ({ reps: +s.reps, weight: setWeight(e, s), sec: +s.sec > 0 ? +s.sec : undefined })),
+          .map((s) => ({ reps: +s.reps, weight: setWeight(e, s) })),
       }))
       .filter((e) => e.sets.length);
     onSave({ ...draft, exercises });
@@ -1925,8 +1843,6 @@ function WorkoutCard({ w, isPR, onDelete, onEdit, bodyAt }) {
   /* Вес тела на дату тренировки: без него подтягивания не попадают в тоннаж. */
   const body = bodyAt?.(w.date) || 0;
   const t = workoutTonnage(w, body);
-  /* Сумма замеров по упражнению — показывается, только если секундомер включали. */
-  const loadSec = (ex) => ex.sets.reduce((n, s) => n + (+s.sec || 0), 0);
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
       <button onClick={() => setOpen(!open)} className="w-full text-left px-3.5 py-3">
@@ -1964,7 +1880,6 @@ function WorkoutCard({ w, isPR, onDelete, onEdit, bodyAt }) {
                     свой вес ~{bwKg(ex.name, body)} кг{addedKg(ex) ? ` + ${addedKg(ex)} кг` : ""}
                   </span>
                 )}
-                {loadSec(ex) > 0 && <span className="f-body block text-2xs">под нагрузкой {fmtRest(loadSec(ex))}</span>}
               </span>
             </div>
           ))}
@@ -2677,12 +2592,10 @@ function WorkoutEnergyCard({ workouts, metrics, bmr, restOverrides }) {
           <div className="mt-3">
             <div className="f-body text-xs uppercase tracking-wide mb-1" style={{ color: C.dim }}>Как посчитано</div>
             <CalcLine k="Длительность" v={`${energy.minutes} мин`} hint={DUR_SOURCE[energy.source]} />
-            <CalcLine k="Под нагрузкой" v={`${energy.workMin} мин`}
-              hint={`${Math.round(energy.density * 100)}% времени — ${energy.level.label}, ${met} МЕТ · ${
-                energy.measured >= 0.5
-                  ? `по секундомеру подходов${energy.measured < 1 ? " (часть оценена)" : ""}`
-                  : "оценка по темпу, около трёх секунд на повторение"
-              }${energy.uniEstimate ? " · одной рукой считается за две стороны" : ""}${energy.tagged ? " · дроп-сеты и отказ считаются дольше" : ""}`} />
+            <CalcLine k="Под нагрузкой" v={energy.workSec < 600 ? fmtRest(energy.workSec) : `${energy.workMin} мин`}
+              hint={`${Math.round(energy.density * 100)}% времени — ${energy.level.label}, ${met} МЕТ · оценка по темпу, около четырёх секунд на повторение${
+                energy.uniEstimate ? " · одной рукой считается за две стороны" : ""
+              }${energy.tagged ? " · дроп-сеты и отказ считаются дольше" : ""}`} />
             <CalcLine k="Вес тела" v={`${energy.bodyKg} кг`} hint={`замер ${fmtDate(energy.weightDate)}`} />
             <CalcLine k="Всего" v={`${energy.gross} ккал`}
               hint={`${met} × 3,5 × ${energy.bodyKg} ÷ 200 × ${energy.minutes}`} />
@@ -2692,6 +2605,10 @@ function WorkoutEnergyCard({ workouts, metrics, bmr, restOverrides }) {
           </div>
 
           <div className="f-body text-xs mt-3" style={{ color: C.dim }}>
+            Время под нагрузкой измерить нечем: секундомер на подходе считает
+            и то, как человек взял и положил снаряд, а доля этой возни у каждого
+            снаряда своя. Поэтому здесь оценка по темпу и меткам подхода —
+            не точное число, а правдоподобное.
             МЕТ — во сколько раз движение затратнее лежания; плотность берётся
             из самой записи, поэтому час с долгими паузами и час без передышки
             считаются по-разному. «Сверх покоя» — честная прибавка к суточному

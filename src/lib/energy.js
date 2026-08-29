@@ -49,29 +49,30 @@ export function setWorkSec(reps, tags) {
   return Math.round(base * tagFactor(tags));
 }
 
-/* Время подхода: замеренное секундомером, если его включали, иначе оценка
-   по темпу. Замер всегда точнее — три секунды на повторение это средняя
-   температура, а подход в отказ с паузами идёт вдвое дольше.
+/* Время подхода — оценка по темпу, и другого способа его узнать нет.
 
-   Одной рукой (или ногой) подход делается дважды, а повторения пишутся за
-   одну сторону — как и в тоннаже. Оценку поэтому удваиваем: пятнадцать
-   подъёмов на каждую икру это две минуты под нагрузкой, а не одна. Замер
-   не трогаем: секундомер шёл через обе стороны и уже знает правду. */
-export const secOfSet = (set, ex) =>
-  +set.sec > 0 ? +set.sec : setWorkSec(set.reps, ex?.tags) * (ex?.uni ? 2 : 1);
+   Здесь стоял секундомер на каждый подход, и он казался честнее формулы.
+   Оказалось наоборот. Секундомер идёт от кнопки до кнопки: лёг, взял
+   гантели, сделал подход, положил, отдышался, нажал. Сколько из этого
+   пришлось на саму работу, он не знает, и доля эта у каждого снаряда своя —
+   в жиме ногами человек уже сидит в тренажёре, а за гантелями ещё идти.
+   То есть точность он обещал, а давал завышенное число с неизвестной
+   ошибкой, требуя за это нажатия на каждый подход.
+
+   Оценка по темпу не притворяется замером и потому надёжнее: четыре
+   секунды на повторение, а метки подхода поправляют её там, где темп
+   заведомо другой. */
+
+/** Одной рукой (или ногой) подход делается дважды, а повторения пишутся
+    за одну сторону — как и в тоннаже. Пятнадцать подъёмов на каждую икру
+    это две минуты работы, а не одна. */
+export const secOfSet = (set, ex) => setWorkSec(set.reps, ex?.tags) * (ex?.uni ? 2 : 1);
 
 /** Сколько всего секунд под нагрузкой — сумма по всем подходам. */
 export function workSecondsOf(workout) {
   let s = 0;
   for (const ex of workout.exercises || []) for (const set of ex.sets || []) s += secOfSet(set, ex);
   return s;
-}
-
-/** Доля подходов, время которых замерено секундомером, а не оценено. */
-export function measuredShare(workout) {
-  let all = 0, timed = 0;
-  for (const ex of workout.exercises || []) for (const set of ex.sets || []) { all++; if (+set.sec > 0) timed++; }
-  return all ? timed / all : 0;
 }
 
 /** Есть ли оценённые подходы с метками, растягивающими время. */
@@ -130,7 +131,7 @@ export function levelFor(density) {
 
 /**
  * Полный расчёт по одной тренировке.
- * @returns {null|{minutes:number, source:"timer"|"estimate"|"fixed", workMin:number, measured:number,
+ * @returns {null|{minutes:number, source:"timer"|"estimate"|"fixed", workMin:number, workSec:number,
  *   uniEstimate:boolean, density:number, level:object, gross:number, rest:number, net:number,
  *   bodyKg:number, weightDate:string}}
  */
@@ -157,7 +158,7 @@ export function workoutEnergy(workout, { metrics, bmr, restOverrides } = {}) {
   const rest = bmr ? Math.round((bmr / 1440) * minutes) : 0;
 
   return {
-    minutes, source, workMin: Math.round(workSec / 60), measured: measuredShare(workout),
+    minutes, source, workMin: Math.round(workSec / 60), workSec,
     uniEstimate: hasUniEstimate(workout), tagged: hasTagged(workout), density, level,
     gross, rest, net: Math.max(0, gross - rest), bodyKg: w.kg, weightDate: w.date,
   };
