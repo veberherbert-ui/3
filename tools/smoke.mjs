@@ -635,6 +635,61 @@ ok(dayNow.exercises.includes("Тяга гантели в наклоне одно
 ok(dayNow.exercises.indexOf("Тяга гантели в наклоне одной рукой") === 1, "и именно на его место, а не в конец",
   `позиция ${dayNow.exercises.indexOf("Тяга гантели в наклоне одной рукой")}`);
 
+section("Что метки меняют");
+/* Метки — единственное место, где человек прямо говорит, как прошёл подход:
+   тоннаж и повторения об этом молчат. Раньше они только показывались
+   в журнале и уходили в выгрузку.
+
+   Проверяем на своих данных в отдельном окружении: нужна история из двух
+   тренировок с определёнными метками, а подгонять под это основной прогон
+   значило бы ломать всё, что идёт после. */
+const tagCtx = await browser.newContext({ ...devices[DEVICE], locale: "ru-RU", timezoneId: TZ });
+const tp = await tagCtx.newPage();
+await tp.goto(URL, { waitUntil: "networkidle" });
+await tp.waitForTimeout(900);
+await tp.evaluate(async () => {
+  const db = await new Promise((r) => { const q = indexedDB.open("iron-diary"); q.onsuccess = () => r(q.result); });
+  const put = (k, v) => new Promise((r) => { const t = db.transaction("kv", "readwrite").objectStore("kv").put(v, k); t.onsuccess = () => r(); });
+  const set = (reps, weight) => ({ reps, weight });
+  await put("accepted", true);
+  await put("setup", true);
+  await put("profile", { height: "179", age: "23", sex: "m", activity: "1.55" });
+  await put("days", [{ id: "d1", name: "Верх", exercises: ["Жим гантелей лёжа (горизонт)", "Тяга верхнего блока (V-хват)", "Фейспул"] }]);
+  const day = (id, date, list) => ({ id, date, dayId: "d1", dayLabel: "Верх", durationMin: 70, exercises: list });
+  await put("workouts", [
+    day("w1", "2026-08-28", [
+      { name: "Жим гантелей лёжа (горизонт)", pair: true, tags: ["pain"], sets: [set(12, 24), set(12, 24)] },
+      { name: "Тяга верхнего блока (V-хват)", tags: ["cheat"], sets: [set(15, 60), set(15, 65), set(15, 65)] },
+      { name: "Фейспул", tags: ["easy"], sets: [set(15, 35), set(15, 35), set(12, 35)] },
+    ]),
+    day("w2", "2026-08-21", [
+      { name: "Жим гантелей лёжа (горизонт)", pair: true, tags: ["pain"], sets: [set(12, 24), set(12, 24)] },
+    ]),
+  ]);
+});
+await tp.reload({ waitUntil: "networkidle" });
+await tp.waitForTimeout(1500);
+const hintOf = async (name) =>
+  (await tp.locator("div.rounded-xl").filter({ hasText: name }).first().innerText()).replace(/\n/g, " ");
+
+/* «Читинг»: верх диапазона выбит, но советовать добавить вес нельзя —
+   честный совет противоположный. */
+ok(/с читингом — сначала техника/.test(await hintOf("Тяга верхнего блока")),
+  "с читингом приложение не советует добавлять вес");
+/* «Был запас» — прямое «мог больше», сильнее любого счёта повторений. */
+ok(/сам отметил, что был запас/.test(await hintOf("Фейспул")),
+  "«был запас» сам по себе повод добавить вес");
+/* Своя история боли весит больше общей таблицы рисков. */
+ok(/болело 2 раза/.test(await hintOf("Жим гантелей лёжа")),
+  "повторяющаяся боль на упражнении видна в списке");
+await tp.getByRole("button", { name: /Об упражнении «Жим гантелей лёжа/ }).click();
+await tp.waitForTimeout(700);
+const painCard = await tp.locator(".sheet-panel").innerText();
+ok(/Ты отмечал боль 2 раза/.test(painCard), "карточка упражнения знает про боль");
+ok(/Чем заменить/i.test(painCard), "и сразу предлагает, чем заменить");
+ok(/к врачу, а не в зал/.test(painCard), "и не берётся лечить");
+await tagCtx.close();
+
 section("Сплиты под инвентарь");
 /* Готовый сплит — это порядок движений, а не список снарядов. С турником
    и полом он должен подставить отжимания вместо жима, а не показать

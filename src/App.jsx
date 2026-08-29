@@ -20,7 +20,7 @@ import { useDragOrder, moveItem } from "./lib/reorder.js";
 import { shareOrDownload, readFileAsText, backupName } from "./lib/backup.js";
 import { restFor, fmtRest, stepRest } from "./lib/rest.js";
 import { workoutEnergy } from "./lib/energy.js";
-import { summary, movers, weeklyVolume, muscleWeek, compare } from "./lib/progress.js";
+import { summary, movers, weeklyVolume, muscleWeek, compare, weightAdvice, rmDoubtful, painFlag } from "./lib/progress.js";
 import { primeAudio, playRestOver, scheduleRestOver, cancelScheduled, vibrate, tapBuzz, releaseAudio, audioReady, setAudioMode } from "./lib/sound.js";
 import { notifyState, askNotify, scheduleRestNotice, cancelRestNotice } from "./lib/notify.js";
 import { openBack, closeBack } from "./lib/backstack.js";
@@ -398,13 +398,18 @@ function TechniqueBlock({ name, fallbackCue }) {
   );
 }
 
-function ExerciseInfo({ name, onClose, days, onAddToDay, conditions = [], gear = [] }) {
+function ExerciseInfo({ name, onClose, days, onAddToDay, conditions = [], gear = [], workouts = [] }) {
   const [shown, setShown] = useState(name);
   useEffect(() => setShown(name), [name]);
   const info = EXDB[shown];
   const [pick, setPick] = useState(false);
   /* Варианты того же движения — только на том, что есть под рукой. */
   const siblings = useMemo(() => variantsOf(shown).filter((n) => fitsGear(n, gear)), [shown, gear]);
+  /* Своя история боли. Система замен уже написана и работает от общих
+     таблиц риска; здесь в неё подаётся то, что человек отметил сам, —
+     свидетельство более личное и потому более веское. */
+  const hurt = useMemo(() => painFlag(workouts, shown), [workouts, shown]);
+  const instead = useMemo(() => (hurt ? similarTo(shown, gear, 4) : []), [hurt, shown, gear]);
   return (
     <Sheet onClose={onClose}>
       <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>
@@ -413,6 +418,31 @@ function ExerciseInfo({ name, onClose, days, onAddToDay, conditions = [], gear =
           <button onClick={() => setShown(name)} className="tap-inline f-body text-xs ml-2 align-middle underline" style={{ color: C.blueText }}>← назад</button>
         )}
       </div>
+      {hurt && (
+        <div className="rounded-xl px-3 py-2.5 mb-3" style={{ background: C.surfaceHi, border: `1px solid ${C.redText}` }}>
+          <div className="f-body text-sm font-medium flex items-center gap-1.5" style={{ color: C.redText }}>
+            <HeartPulse size={14} /> Ты отмечал боль {hurt.times} {plural(hurt.times, "раз", "раза", "раз")}
+          </div>
+          <div className="f-body text-xs mt-1" style={{ color: C.dim }}>
+            Последний раз {fmtDate(hurt.last)} Это не диагноз, но повторяющаяся боль
+            в одном движении — повод его заменить, а не перетерпеть.
+            {" "}При боли в покое или ночью — к врачу, а не в зал.
+          </div>
+          {instead.length > 0 && (
+            <div className="mt-2">
+              <div className="f-body text-2xs uppercase tracking-wide mb-1" style={{ color: C.dim }}>Чем заменить</div>
+              <div className="flex flex-wrap gap-1.5">
+                {instead.map((x) => (
+                  <button key={x.name} onClick={() => setShown(x.name)}
+                    className="f-body text-xs rounded-full px-2.5 py-1"
+                    style={{ background: C.surface, color: C.chalk, border: `1px solid ${C.line}` }}>{x.name}</button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {info ? (<>
         <div className="flex flex-wrap gap-1.5 mb-3">
           <span className="f-body text-xs rounded-full px-2 py-0.5" style={{ background: C.red, color: C.chalk }}>{info.m}</span>
@@ -897,7 +927,11 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
           )}
           {picked.map((n) => {
             const prev = lastFor(n);
-            const up = prev && readyToAdd(prev.ex);
+            /* Совет про вес теперь читает и метки: «был запас» — это прямое
+               «мог больше», а «читинг» — повод не добавлять, а вернуть
+               технику. Повторения одни этого не знают. */
+            const up = prev && weightAdvice(prev.ex);
+            const hurt = painFlag(workouts, n);
             return (
               <div key={n} className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
                 {/* Нажатие по названию предлагает замену — то же, что и
@@ -905,7 +939,18 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
                 <button onClick={() => setSwapName(n)} className="flex-1 text-left min-w-0">
                   <div className="f-body text-sm" style={{ color: C.chalk }}>{n}{isUni(n) && <UniTag />}<RiskMark name={n} conditions={conditions} /></div>
                   {prev && <div className="f-num text-2xs truncate" style={{ color: C.dim }}>{fmtDate(prev.date)}: {setsLine(prev.ex)}</div>}
-                  {up && <div className="f-body text-2xs" style={{ color: C.mustard }}>{isBW(n) ? "выбил верх диапазона — пробуй с утяжелением" : "выбил верх диапазона — пробуй +2.5 кг"}</div>}
+                  {up && (
+                    <div className="f-body text-2xs" style={{ color: up.add ? C.mustard : C.dim }}>
+                      {up.why}{up.add ? (isBW(n) ? " · пробуй с утяжелением" : " · пробуй +2.5 кг") : ""}
+                    </div>
+                  )}
+                  {/* Своя история боли весит больше общей таблицы рисков:
+                      её не выдумали за тебя, ты её сам отметил. */}
+                  {hurt && (
+                    <div className="f-body text-2xs" style={{ color: C.redText }}>
+                      болело {hurt.times} {plural(hurt.times, "раз", "раза", "раз")} — нажми, чтобы заменить
+                    </div>
+                  )}
                 </button>
                 <button onClick={() => setInfo(n)} aria-label={`Об упражнении «${n}»`} className="shrink-0 flex items-center justify-center"><Info size={18} color={C.dim} /></button>
                 <button onClick={() => toggle(n)} aria-label={`Убрать «${n}» из тренировки`}
@@ -953,7 +998,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
             onClose={() => setAdding(false)}
           />
         )}
-        {info && <ExerciseInfo name={info} onClose={() => setInfo(null)} conditions={conditions} gear={gear} />}
+        {info && <ExerciseInfo name={info} onClose={() => setInfo(null)} conditions={conditions} gear={gear} workouts={workouts} />}
       </div>
     );
   }
@@ -1304,7 +1349,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
           <button onClick={() => setMenu(false)} className="f-body w-full mt-2 py-3 text-sm" style={{ color: C.dim }}>Отмена</button>
         </Sheet>
       )}
-      {info && <ExerciseInfo name={info} onClose={() => setInfo(null)} conditions={conditions} gear={gear} />}
+      {info && <ExerciseInfo name={info} onClose={() => setInfo(null)} conditions={conditions} gear={gear} workouts={workouts} />}
     </div>
   );
 }
@@ -1387,7 +1432,7 @@ function GearCard({ gear, setGear, flush }) {
   );
 }
 
-function Catalog({ days, onAddToDay, conditions, gear, setGear }) {
+function Catalog({ days, onAddToDay, conditions, gear, setGear, workouts = [] }) {
   const [q, setQ] = useState("");
   const [openG, setOpenG] = useState(null);
   const [openM, setOpenM] = useState(null);
@@ -1471,7 +1516,7 @@ function Catalog({ days, onAddToDay, conditions, gear, setGear }) {
           })}
         </div>
       )}
-      {info && <ExerciseInfo name={info} onClose={() => setInfo(null)} days={days} onAddToDay={onAddToDay} conditions={conditions} gear={gear} />}
+      {info && <ExerciseInfo name={info} onClose={() => setInfo(null)} days={days} onAddToDay={onAddToDay} conditions={conditions} gear={gear} workouts={workouts} />}
     </div>
   );
 }
@@ -1655,7 +1700,7 @@ function DaysEditor({ days, setDays, conditions, gear }) {
    на каталоге упражнений — то есть на энциклопедии, а своя программа была
    спрятана за ещё одно нажатие. Теперь наоборот: первым идёт то, ради чего
    сюда заходят каждую неделю. */
-function BaseTab({ days, setDays, initialView, conditions, gear, setGear, profile, setProfile }) {
+function BaseTab({ days, setDays, initialView, conditions, gear, setGear, profile, setProfile, workouts = [] }) {
   const [view, setView] = useState(initialView || "days");
   useEffect(() => { if (initialView) setView(initialView); }, [initialView]);
   const addToDay = (id, n) => setDays(days.map((d) => (d.id === id && !d.exercises.includes(n) ? { ...d, exercises: [...d.exercises, n] } : d)));
@@ -1667,7 +1712,7 @@ function BaseTab({ days, setDays, initialView, conditions, gear, setGear, profil
         ))}
       </div>
       {view === "catalog"
-        ? <Catalog days={days} onAddToDay={addToDay} conditions={conditions} gear={gear} setGear={setGear} />
+        ? <Catalog days={days} onAddToDay={addToDay} conditions={conditions} gear={gear} setGear={setGear} workouts={workouts} />
         : (
           <>
             <DaysEditor days={days} setDays={setDays} conditions={conditions} gear={gear} />
@@ -2324,10 +2369,10 @@ function ProgressTab({ workouts, bodyAt, metrics, bmr, restOverrides }) {
         if (!heavy) return;
         const cur = map[ex.name] || (map[ex.name] = { name: ex.name, bw });
         if (!cur.heavy || heavy.kg > cur.heavy.kg || (heavy.kg === cur.heavy.kg && heavy.reps > cur.heavy.reps)) {
-          cur.heavy = { ...heavy, date: w.date, rm: est1RM(ex) };
+          cur.heavy = { ...heavy, date: w.date, rm: est1RM(ex), doubt: rmDoubtful(ex), tags: ex.tags };
         }
         if (!cur.most || most.reps > cur.most.reps || (most.reps === cur.most.reps && most.kg > cur.most.kg)) {
-          cur.most = { ...most, date: w.date };
+          cur.most = { ...most, date: w.date, tags: ex.tags };
         }
       });
     });
@@ -2439,14 +2484,22 @@ function ProgressTab({ workouts, bodyAt, metrics, bmr, restOverrides }) {
             <div key={r.name} className="rounded-xl px-3 py-2.5" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
               <div className="f-body text-xs truncate" style={{ color: C.chalk }}>{r.name}</div>
               <div className="f-body text-2xs mb-1.5" style={{ color: C.dim }}>{EXDB[r.name]?.m || "своё упражнение"}</div>
+              {r.heavy.doubt && (
+                <div className="f-body text-2xs mb-1" style={{ color: C.mustard }}>
+                  взят с меткой «{tagLine(r.heavy.tags.filter((t) => t === "cheat" || t === "partial"))}» — расчётный максимум завышен
+                </div>
+              )}
               <div className="flex items-baseline justify-between gap-3">
                 <span className="f-body text-2xs" style={{ color: C.dim }}>{r.bw ? "больше всего повторений" : "тяжелее всего"}</span>
                 <span className="text-right shrink-0">
                   <span className="f-num text-sm font-semibold" style={{ color: C.mustard }}>
                     {r.bw ? `${r.heavy.reps} повт` : `${r.heavy.reps}×${r.heavy.kg}`}
                   </span>
-                  <span className="f-num text-2xs ml-2" style={{ color: C.dim }}>
-                    {fmtDate(r.heavy.date)}{!r.bw && r.heavy.rm ? ` · 1ПМ ~${r.heavy.rm}` : ""}
+                  {/* Рекорд, взятый корпусом или на половине амплитуды, —
+                      это другое достижение. Не пересчитываем: пересчёт был бы
+                      выдумыванием. Помечаем. */}
+                  <span className="f-num text-2xs ml-2" style={{ color: r.heavy.doubt ? C.mustard : C.dim }}>
+                    {fmtDate(r.heavy.date)}{!r.bw && r.heavy.rm ? ` · 1ПМ ~${r.heavy.rm}${r.heavy.doubt ? "?" : ""}` : ""}
                   </span>
                 </span>
               </div>
@@ -2966,7 +3019,11 @@ export default function App() {
         const own = ex.bodyweight ? bwKg(ex.name, bodyAt(w.date)) : null;
         const how = [ex.uni && "каждой стороной", ex.pair && "вес одной гантели"].filter(Boolean).join(", ");
         const marks = tagLine(ex.tags);
-        lines.push(`- ${ex.name}${how ? ` [${how}]` : ""}: ${s}${own ? ` [свой вес ~${own} кг]` : ""}${rm ? ` (расч.1ПМ ${rm})` : ""}${marks ? ` — ${marks}` : ""}`);
+        /* Знак вопроса у максимума, взятого корпусом или на половине
+           амплитуды: формула этого не видит, а человек, читающий выгрузку,
+           должен. */
+        const doubt = rmDoubtful(ex) ? "?" : "";
+        lines.push(`- ${ex.name}${how ? ` [${how}]` : ""}: ${s}${own ? ` [свой вес ~${own} кг]` : ""}${rm ? ` (расч.1ПМ ${rm}${doubt})` : ""}${marks ? ` — ${marks}` : ""}`);
       });
       if (w.note) lines.push(`- заметка: ${w.note}`);
     });
@@ -3114,7 +3171,7 @@ export default function App() {
         style={{ overscrollBehavior: "contain" }} aria-labelledby={`tab-${shownTab}`}>
         <div key={shownTab} className="tab-in">
         {shownTab === "session" && <SessionTab session={session} setSession={setSession} workouts={workouts} days={days} onFinish={finishSession} goToDays={() => { setBaseView("days"); setTab("plan"); }} conditions={conditions} restOverrides={restOverrides} setRestOverride={setRestOverride} muted={muted} bodyAt={bodyAt} gear={gear} />}
-        {shownTab === "plan" && <BaseTab days={days} setDays={setDays} initialView={baseView} conditions={conditions} gear={gear} setGear={setGear} profile={profile} setProfile={setProfile} />}
+        {shownTab === "plan" && <BaseTab days={days} setDays={setDays} initialView={baseView} conditions={conditions} gear={gear} setGear={setGear} profile={profile} setProfile={setProfile} workouts={workouts} />}
         {shownTab === "diary" && <DiaryTab view={diaryView} setView={setDiaryView} workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} onUpdate={updateWorkout} onAdd={addWorkout} days={days} conditions={conditions} bodyAt={bodyAt} gear={gear} metrics={metrics} bmr={bmr} restOverrides={restOverrides} />}
         {shownTab === "body" && <BodyTab metrics={metrics} profile={profile} setProfile={setProfile} onAdd={addMetric} onDelete={deleteMetric} workouts={workouts} restOverrides={restOverrides} />}
         </div>

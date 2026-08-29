@@ -1,4 +1,4 @@
-import { EXDB, GROUPS, PUSH_M, PULL_M, moveOf } from "../data/exercises.js";
+import { EXDB, GROUPS, PUSH_M, PULL_M, moveOf, BW_STATIC } from "../data/exercises.js";
 import { exTonnage, workoutTonnage, topWeight, topReps, est1RM, r1 } from "./calc.js";
 import { workoutEnergy } from "./energy.js";
 import { daysAgo } from "./dates.js";
@@ -207,3 +207,72 @@ export function compare(a, b, { metrics, bmr, restOverrides, bodyAt } = {}) {
   };
   return { rows, a: stat(a), b: stat(b) };
 }
+
+/* Что метки говорят об упражнении.
+
+   Метки собирались, показывались в журнале и уходили в выгрузку — и всё.
+   Между тем это единственные данные, где человек прямо говорит, как прошёл
+   подход: тоннаж и повторения об этом молчат.
+
+   Здесь они превращаются в три вывода. «Болело» — своя, личная история
+   боли на конкретном упражнении, которая весит больше любой общей таблицы
+   рисков. «Был запас» и «читинг» — прямой ответ на вопрос, добавлять ли
+   вес: в одном случае человек сам сказал, что мог больше, в другом —
+   что техника поехала. «Читинг» и «частичные» — повод не верить
+   расчётному одноповторному максимуму: вес сдвинут корпусом или
+   на половине амплитуды, и формула этого не видит. */
+
+/** Сколько раз упражнение отмечалось меткой за последние дни. */
+export function tagHistory(workouts, name, tag, days = 90) {
+  const from = daysAgo(days);
+  let times = 0;
+  let last = null;
+  (workouts || []).forEach((w) => {
+    if (w.date < from) return;
+    (w.exercises || []).forEach((ex) => {
+      if (ex.name !== name || !ex.tags?.includes(tag)) return;
+      times++;
+      if (!last || w.date > last) last = w.date;
+    });
+  });
+  return { times, last };
+}
+
+/** Повторяющаяся боль — не разовая жалоба, а причина искать замену. */
+export const painFlag = (workouts, name) => {
+  const h = tagHistory(workouts, name, "pain");
+  return h.times >= 2 ? h : null;
+};
+
+/**
+ * Пора ли добавлять вес — и почему.
+ *
+ * Раньше решали только повторения: верх диапазона во всех подходах.
+ * Метки знают больше и иногда прямо противоположное — три подхода по
+ * пятнадцать с читингом это не повод добавлять вес, а повод вернуть
+ * технику.
+ * @returns {null|{add:boolean, why:string}}
+ */
+export function weightAdvice(ex) {
+  if (!ex || BW_STATIC.has(ex.name) || !ex.sets?.length) return null;
+  const tags = ex.tags || [];
+  const reps = ex.sets.map((s) => +s.reps || 0);
+  const dirty = tags.includes("cheat") || tags.includes("partial");
+
+  if (dirty && reps.every((r) => r >= 12)) {
+    return { add: false, why: tags.includes("cheat")
+      ? "верх диапазона выбит, но с читингом — сначала техника, потом вес"
+      : "верх диапазона выбит на частичных — сначала полная амплитуда" };
+  }
+  if (dirty) return null;
+  if (tags.includes("easy") && ex.sets.length >= 2 && reps.every((r) => r >= 10)) {
+    return { add: true, why: "сам отметил, что был запас — пора добавлять" };
+  }
+  if (ex.sets.length >= 2 && reps.every((r) => r >= 12)) {
+    return { add: true, why: "верх диапазона выбит во всех подходах" };
+  }
+  return null;
+}
+
+/** Верить ли расчётному максимуму: читинг и частичные его завышают. */
+export const rmDoubtful = (ex) => !!(ex?.tags?.includes("cheat") || ex?.tags?.includes("partial"));

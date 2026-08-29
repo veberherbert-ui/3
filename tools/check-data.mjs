@@ -160,15 +160,42 @@ Object.keys(BW_SHARE).forEach((name) => {
     fail("подсчёт", "две гантели работают одновременно — время удваивать не нужно");
 
   /* Метки говорят о подходе то, чего не видно по числу повторений. */
-  const drop = { name: "тест", tags: ["drop"], sets: [set] };
-  if (energy.secOfSet(set, drop) <= energy.secOfSet(set, plain))
-    fail("подсчёт", "дроп-сет длится дольше обычного подхода");
-  const many = { name: "тест", tags: ["drop", "fail", "partial"], sets: [set] };
-  if (energy.secOfSet(set, many) !== energy.secOfSet(set, drop))
-    fail("подсчёт", "множители меток не перемножаются — берётся наибольший");
+  const four = (w) => [1, 2, 3, 4].map(() => ({ reps: 12, weight: w }));
+  const secs = (tags, sets = four(20)) => energy.setSecondsOf({ name: "тест", tags, sets });
+  const plainFour = secs([]);
+
+  /* «Отказ» — свойство поздних подходов, а не всех: первые обычно рабочие. */
+  const failed = secs(["fail"]);
+  if (failed[0] !== plainFour[0]) fail("подсчёт", "отказ не должен растягивать первые подходы");
+  if (failed[3] <= plainFour[3]) fail("подсчёт", "отказ должен растягивать поздние подходы");
+  if (failed[1] !== plainFour[1] || failed[2] === plainFour[2])
+    fail("подсчёт", "отказ приходится на позднюю половину подходов");
+
+  /* «Дроп-сет» — только последний подход. */
+  const dropped = secs(["drop"]);
+  if (dropped[2] !== plainFour[2]) fail("подсчёт", "дроп-сет не должен трогать подходы до последнего");
+  if (dropped[3] <= plainFour[3]) fail("подсчёт", "дроп-сет растягивает последний подход");
+
+  /* Сброс, записанный отдельной строкой, уже посчитан повторениями —
+     множитель насчитал бы их второй раз. */
+  const loggedDrop = [...four(20).slice(0, 3), { reps: 12, weight: 15 }];
+  if (secs(["drop"], loggedDrop)[3] !== secs([], loggedDrop)[3])
+    fail("подсчёт", "дроп, записанный отдельной строкой, не должен считаться дважды");
+
+  /* Пауза и частичные — свойство всего упражнения. */
+  if (secs(["pause"]).some((v, i) => v <= plainFour[i]))
+    fail("подсчёт", "пауза растягивает каждый подход");
+  if (secs(["partial"]).some((v, i) => v >= plainFour[i]))
+    fail("подсчёт", "частичные укорачивают каждый подход");
+
+  /* Разные удлинения накладываются, но с затуханием: сумма завышала бы,
+     максимум занижал. */
+  const both = secs(["pause", "fail"])[3];
+  if (!(both > secs(["pause"])[3] && both < secs(["pause"])[3] * 1.2))
+    fail("подсчёт", "пауза и отказ должны складываться с затуханием");
+
   /* Читинг и «был запас» — про скорость, а не про длительность. */
-  const easy = { name: "тест", tags: ["easy", "cheat"], sets: [set] };
-  if (energy.secOfSet(set, easy) !== energy.secOfSet(set, plain))
+  if (secs(["easy", "cheat"]).some((v, i) => v !== plainFour[i]))
     fail("подсчёт", "читинг и «был запас» время подхода не меняют");
 
   /* Секундомера на подходах больше нет: он мерял подход от кнопки до кнопки,

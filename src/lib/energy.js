@@ -25,28 +25,71 @@ const WORK_MAX_SEC = 120;
 const SEC_PER_REP = 4;
 
 /* Метки говорят о подходе то, чего не видно по числу повторений.
-   Дроп-сет — это подход, продолженный на меньшем весе, он и длится дольше
-   всех. Отказ добавляет вязкие последние повторения, пауза — саму паузу.
-   Читинг и «был запас», наоборот, про скорость, а не про длительность,
-   и время не меняют. Множители не перемножаются: берётся наибольший,
-   иначе три метки на одном подходе давали бы вдвое больше правды,
-   чем в нём есть. */
-const TAG_SEC = { drop: 1.6, pause: 1.25, fail: 1.15, partial: 0.85 };
+   Но метка стоит на упражнении, а событие случается в подходах — и не во
+   всех сразу. Поэтому они делятся на два рода.
 
-export const tagFactor = (tags) => {
-  if (!tags?.length) return 1;
-  const known = tags.map((t) => TAG_SEC[t]).filter(Boolean);
-  if (!known.length) return 1;
-  /* растягивающие важнее укорачивающих: если подход и до отказа, и с
-     частичными — это всё-таки долгий подход */
-  const up = known.filter((x) => x > 1);
-  return up.length ? Math.max(...up) : Math.min(...known);
+   Свойство упражнения — техника, применённая ко всем подходам: пауза внизу
+   растягивает каждое повторение, короткая амплитуда каждое укорачивает.
+
+   Свойство отдельных подходов. «Отказ» приходится на поздние подходы:
+   первые обычно рабочие, тяжело становится к концу. Точнее сказать нельзя,
+   да и незачем — множитель мал, и любое правило даёт разницу в секунды.
+   «Дроп-сет» по определению последний.
+
+   Отдельная тонкость с дроп-сетом. Сброс веса чаще всего записывают
+   отдельной строкой — так подсказывает и само приложение кнопкой
+   «+ подход». Тогда повторения на сброшенном весе уже посчитаны, и
+   множитель насчитал бы их второй раз. Распознаётся по тому, что последний
+   подход легче предыдущего. */
+const TAG_ALL = { pause: 1.4, partial: 0.8 };
+const TAG_SET = { fail: 1.2, drop: 1.5 };
+
+/* Растягивающие надбавки складываются с затуханием, а не берутся по
+   максимуму: пауза внизу и вязкий отказ в конце — это два разных
+   удлинения, и они действительно накладываются. Полная сумма при этом
+   завышала бы, отсюда коэффициент. */
+const blend = (list) => {
+  const up = list.filter((x) => x > 1);
+  const down = list.filter((x) => x < 1);
+  const grow = up.length ? 1 + up.reduce((a, x) => a + (x - 1), 0) * 0.7 : 1;
+  return grow * (down.length ? Math.min(...down) : 1);
 };
 
+export const tagFactor = (tags) => blend((tags || []).map((t) => TAG_ALL[t] ?? TAG_SET[t]).filter(Boolean));
+
+/** Дроп-сет записан отдельной строкой: последний подход легче предыдущего. */
+const dropLogged = (sets, i) =>
+  i === sets.length - 1 && i > 0 && +sets[i].weight > 0 && +sets[i].weight < +sets[i - 1].weight;
+
+/** Множитель для одного подхода: техника упражнения плюс то, что случилось
+    в этом конкретном подходе. */
+function setFactor(ex, i) {
+  const tags = ex?.tags || [];
+  const sets = ex?.sets || [];
+  const all = tags.map((t) => TAG_ALL[t]).filter(Boolean);
+  const mine = [];
+  /* поздняя половина подходов: при четырёх — два последних, при одном — он */
+  const failFrom = sets.length - Math.ceil(sets.length / 2);
+  if (tags.includes("fail") && i >= failFrom) mine.push(TAG_SET.fail);
+  if (tags.includes("drop") && i === sets.length - 1 && !dropLogged(sets, i)) mine.push(TAG_SET.drop);
+  return blend([...all, ...mine]);
+}
+
+/** Базовая оценка подхода по темпу, без учёта того, в каком он по счёту. */
 export function setWorkSec(reps, tags) {
   const r = +reps || 0;
   const base = Math.min(WORK_MAX_SEC, Math.max(WORK_MIN_SEC, Math.round(r * SEC_PER_REP)));
   return Math.round(base * tagFactor(tags));
+}
+
+/** Секунды по каждому подходу упражнения — с учётом того, где что случилось. */
+export function setSecondsOf(ex) {
+  const mult = ex?.uni ? 2 : 1;
+  return (ex?.sets || []).map((set, i) => {
+    const r = +set.reps || 0;
+    const base = Math.min(WORK_MAX_SEC, Math.max(WORK_MIN_SEC, Math.round(r * SEC_PER_REP)));
+    return Math.round(base * setFactor(ex, i)) * mult;
+  });
 }
 
 /* Время подхода — оценка по темпу, и другого способа его узнать нет.
@@ -66,19 +109,22 @@ export function setWorkSec(reps, tags) {
 /** Одной рукой (или ногой) подход делается дважды, а повторения пишутся
     за одну сторону — как и в тоннаже. Пятнадцать подъёмов на каждую икру
     это две минуты работы, а не одна. */
-export const secOfSet = (set, ex) => setWorkSec(set.reps, ex?.tags) * (ex?.uni ? 2 : 1);
+export const secOfSet = (set, ex) => {
+  const i = (ex?.sets || []).indexOf(set);
+  return i >= 0 ? setSecondsOf(ex)[i] : setWorkSec(set.reps, ex?.tags) * (ex?.uni ? 2 : 1);
+};
 
 /** Сколько всего секунд под нагрузкой — сумма по всем подходам. */
 export function workSecondsOf(workout) {
   let s = 0;
-  for (const ex of workout.exercises || []) for (const set of ex.sets || []) s += secOfSet(set, ex);
+  for (const ex of workout.exercises || []) s += setSecondsOf(ex).reduce((a, b) => a + b, 0);
   return s;
 }
 
 /** Есть ли оценённые подходы с метками, растягивающими время. */
 export function hasTagged(workout) {
   for (const ex of workout.exercises || [])
-    if (tagFactor(ex.tags) !== 1) for (const set of ex.sets || []) if (!(+set.sec > 0)) return true;
+    if (setSecondsOf(ex).some((sec, i) => sec !== setSecondsOf({ ...ex, tags: [] })[i])) return true;
   return false;
 }
 
@@ -104,7 +150,7 @@ export function estimateSeconds(workout, restOverrides) {
   let total = 0;
   const sets = [];
   for (const ex of workout.exercises || [])
-    for (const set of ex.sets || []) sets.push({ name: ex.name, sec: secOfSet(set, ex) });
+    setSecondsOf(ex).forEach((sec) => sets.push({ name: ex.name, sec }));
   sets.forEach((s, i) => {
     total += s.sec;
     if (i < sets.length - 1) total += restFor(s.name, restOverrides);
