@@ -80,7 +80,10 @@ export function est1RM(ex) {
   ex.sets.forEach((s) => {
     const w = +s.weight,
       r = +s.reps;
-    if (!w || !r || r > 15) return;
+    /* Выше двенадцати повторений формулы разъезжаются: пятнадцать по
+       восемьдесят дают больше, чем шесть по сто, — то есть рабочий подход
+       обгоняет тяжёлый. Считаем только там, где им ещё можно верить. */
+    if (!w || !r || r > 12) return;
     const v = (epley(w, r) + brzycki(w, r)) / 2;
     if (v > best) best = v;
   });

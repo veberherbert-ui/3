@@ -244,32 +244,75 @@ export const painFlag = (workouts, name) => {
   return h.times >= 2 ? h : null;
 };
 
+/* Рабочие подходы — те, что составляют объём упражнения.
+
+   Якорь — вес, который встречается чаще других; если явного нет, медиана.
+   Рабочим считается подход в пределах десяти процентов от якоря: обычный
+   шаг блинов на рабочих весах — три-восемь процентов, значит раскладка
+   по подходам внутрь укладывается, а разовая проверка на тяжёлом или
+   сброс на дроп-сете выпадают.
+
+   Осталось меньше двух — берём все: без данных умничать не надо. */
+const anchorWeight = (weights) => {
+  const count = new Map();
+  weights.forEach((w) => count.set(w, (count.get(w) || 0) + 1));
+  const top = Math.max(...count.values());
+  const often = [...count].filter(([, n]) => n === top).map(([w]) => w);
+  if (top > 1 && often.length === 1) return often[0];
+  const sorted = [...weights].sort((a, b) => a - b);
+  const m = sorted.length / 2;
+  return sorted.length % 2 ? sorted[Math.floor(m)] : (sorted[m - 1] + sorted[m]) / 2;
+};
+
+export function workingSets(ex) {
+  const sets = (ex?.sets || []).filter((s) => +s.reps > 0);
+  if (sets.length < 2) return sets;
+  const weights = sets.map((s) => +s.weight || 0);
+  const a = anchorWeight(weights);
+  if (!a) return sets;
+  const keep = sets.filter((s) => Math.abs((+s.weight || 0) - a) / a <= 0.1);
+  return keep.length >= 2 ? keep : sets;
+}
+
 /**
  * Пора ли добавлять вес — и почему.
  *
- * Раньше решали только повторения: верх диапазона во всех подходах.
- * Метки знают больше и иногда прямо противоположное — три подхода по
- * пятнадцать с читингом это не повод добавлять вес, а повод вернуть
- * технику.
+ * Считается объём на рабочем весе, а не каждый подход по отдельности.
+ * Правило «во всех подходах верх диапазона» ломается на живой тренировке:
+ * подходы 12, 19, 8 его не проходят, хотя всего на этом весе сделано
+ * тридцать девять повторений против тридцати шести нужных — восьмёрка тут
+ * не предел, а долг за девятнадцать. Сумма отвечает на тот же вопрос
+ * честнее: столько работы на этом весе мышца уже сделала.
+ *
+ * Нижняя граница на подход при этом остаётся — иначе один огромный подход
+ * и два развалившихся выглядели бы выполненной целью.
  * @returns {null|{add:boolean, why:string}}
  */
+const TOP_REPS = 12;
+const EASY_REPS = 10;
+
+const beatsRange = (reps, target) =>
+  reps.length >= 2
+  && reps.reduce((a, b) => a + b, 0) >= target * reps.length
+  && Math.min(...reps) >= Math.ceil(target / 2);
+
 export function weightAdvice(ex) {
   if (!ex || BW_STATIC.has(ex.name) || !ex.sets?.length) return null;
   const tags = ex.tags || [];
-  const reps = ex.sets.map((s) => +s.reps || 0);
+  const reps = workingSets(ex).map((s) => +s.reps || 0);
   const dirty = tags.includes("cheat") || tags.includes("partial");
 
-  if (dirty && reps.every((r) => r >= 12)) {
+  if (dirty && beatsRange(reps, TOP_REPS)) {
     return { add: false, why: tags.includes("cheat")
       ? "верх диапазона выбит, но с читингом — сначала техника, потом вес"
       : "верх диапазона выбит на частичных — сначала полная амплитуда" };
   }
   if (dirty) return null;
-  if (tags.includes("easy") && ex.sets.length >= 2 && reps.every((r) => r >= 10)) {
+  if (tags.includes("easy") && beatsRange(reps, EASY_REPS)) {
     return { add: true, why: "сам отметил, что был запас — пора добавлять" };
   }
-  if (ex.sets.length >= 2 && reps.every((r) => r >= 12)) {
-    return { add: true, why: "верх диапазона выбит во всех подходах" };
+  if (beatsRange(reps, TOP_REPS)) {
+    return { add: true, why: "объём на рабочем весе выбран — пора добавлять" };
   }
   return null;
 }
