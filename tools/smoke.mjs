@@ -5,8 +5,13 @@
      npx http-server dist -p 4173 -a 127.0.0.1 --silent &
      node tools/smoke.mjs
 
-   Playwright нужен только для этой проверки и не входит в зависимости
-   приложения: npm i -D playwright && npx playwright install chromium
+   Playwright с двумя помощниками для разбора кода лежат в devDependencies:
+   в сборку приложения они не попадают, но после свежего клона проверка
+   работает без отдельной установки. Браузер качается один раз:
+   npx playwright install chromium
+
+   Однажды они стояли неучтёнными, и первая же установка любого пакета
+   вымела их из node_modules вместе с возможностью что-либо проверить.
 
    Проверяются те места, где уже ловились настоящие ошибки: порядок хуков
    при старте сессии, локальные даты, перекрытие всплывающих листов,
@@ -14,11 +19,15 @@
 
 const URL = process.env.SMOKE_URL || "http://127.0.0.1:4173/";
 
-let chromium, devices;
+let chromium, devices, PNG, jsQR;
 try {
   ({ chromium, devices } = await import("playwright"));
+  /* Код для камеры проверяется тем же способом, каким его прочитает
+     человек: снимок — в разбор. Отсюда два маленьких помощника. */
+  ({ PNG } = await import("pngjs"));
+  jsQR = (await import("jsqr")).default;
 } catch {
-  console.error("Нужен playwright: npm i -D playwright && npx playwright install chromium");
+  console.error("Нужны playwright, pngjs и jsqr: npm i -D playwright pngjs jsqr && npx playwright install chromium");
   process.exit(2);
 }
 
@@ -933,6 +942,62 @@ const skipIntro = async (pg) => {
   await pg.reload({ waitUntil: "networkidle" });
   await pg.waitForTimeout(1500);
 };
+
+section("Отдать ссылку другому человеку");
+/* Изнутри приложения ссылку взять неоткуда: у установленного нет строки
+   адреса, а во вкладке лезть за ней и выделять руками — не то, что делают,
+   когда телефон уже протянут другому. */
+await page.getByRole("button", { name: "Настройки" }).click();
+await page.waitForTimeout(500);
+ok(await visible(page.getByRole("button", { name: "Поделиться приложением" })),
+  "поделиться приложением можно из настроек — два нажатия из любого места");
+await page.getByRole("button", { name: "Поделиться приложением" }).click();
+await page.waitForTimeout(1500);
+
+/* Код проверяем так же, как его будет читать жена, — камерой. Нарисованные
+   квадратики сами по себе ничего не доказывают: ошибка в кодировании
+   выглядит точно так же, как её отсутствие. */
+const qr = page.locator("svg[role=img]").first();
+ok(await visible(qr), "код для камеры нарисован");
+const qrPng = PNG.sync.read(await qr.screenshot());
+const qrRead = jsQR(new Uint8ClampedArray(qrPng.data), qrPng.width, qrPng.height);
+ok(qrRead?.data === URL, "код читается камерой и ведёт на приложение", qrRead?.data || "не прочитался");
+
+const shareText = await page.locator("div.rounded-t-2xl").last().innerText();
+/* Код читается не всегда — адрес должно быть видно и словами. */
+ok(shareText.includes(URL.replace(/^https?:\/\//, "")), "адрес виден текстом — его можно продиктовать");
+/* Ссылка, отправленная в переписке, откроется во встроенном окне, где
+   установки нет. Об этом честнее сказать до отправки, а не после. */
+ok(/встроенном окне|не поставить/.test(shareText), "предупреждение про мессенджер на месте");
+
+await page.getByRole("button", { name: "Закрыть" }).last().click();
+await page.waitForTimeout(400);
+
+/* На телефоне ссылка уходит через системное меню. В испытательном браузере
+   его нет, поэтому подставляем своё и смотрим, что именно приложение отдаёт. */
+{
+  const shareCtx = await browser.newContext({ ...devices[DEVICE], locale: "ru-RU", timezoneId: TZ });
+  await shareCtx.addInitScript(() => {
+    window.__shared = null;
+    navigator.share = (d) => { window.__shared = d; return Promise.resolve(); };
+  });
+  const sp = await shareCtx.newPage();
+  await sp.goto(URL, { waitUntil: "networkidle" });
+  await sp.waitForTimeout(2000);
+  await skipIntro(sp);
+  await sp.getByRole("button", { name: "Настройки" }).click();
+  await sp.waitForTimeout(500);
+  await sp.getByRole("button", { name: "Поделиться приложением" }).click();
+  await sp.waitForTimeout(800);
+  const sendBtn = sp.getByRole("button", { name: "Отправить ссылку" });
+  ok(await visible(sendBtn), "где есть системное «Поделиться» — предлагается оно, а не буфер обмена");
+  await sendBtn.click();
+  await sp.waitForTimeout(500);
+  const sent = await sp.evaluate(() => window.__shared);
+  ok(sent?.url === URL, "уходит адрес приложения", sent?.url || "ничего не ушло");
+  ok(/Железный дневник/.test(sent?.title || ""), "и понятное название, а не голая ссылка", sent?.title || "");
+  await shareCtx.close();
+}
 
 section("Установка на телефон");
 /* Ссылку раздают, а по ссылке приложение открывается вкладкой: без значка,

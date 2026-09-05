@@ -29,6 +29,7 @@ import { adaptPreset, similarTo, byFit } from "./lib/fitplan.js";
 import { useWakeLock } from "./lib/wakelock.js";
 import { buildLabel, installed, checkForUpdate, reloadOnUpdate } from "./lib/update.js";
 import { installPlan, promptInstall, canPrompt, onInstallable, hardReset, browserKind } from "./lib/install.js";
+import { shareApp, canShare, appUrl } from "./lib/share.js";
 import { useAppearance, TEXT_SIZES } from "./lib/appearance.js";
 import DisclaimerGate, { DisclaimerBody } from "./Disclaimer.jsx";
 import SetupGate from "./Setup.jsx";
@@ -36,6 +37,10 @@ import SetupGate from "./Setup.jsx";
 /* Графики грузятся отдельным куском: библиотека тяжёлая, а нужна только
    на двух вкладках из пяти. */
 const LineByDate = lazy(() => import("./Charts.jsx").then((m) => ({ default: m.LineByDate })));
+
+/* Код для камеры — тоже отдельным куском: библиотека кодирования нужна
+   на одном экране, который открывают раз в жизни. */
+const QrCode = lazy(() => import("./QrCode.jsx"));
 
 /** Место под график, пока он подгружается — чтобы страница не дёргалась. */
 const ChartFrame = ({ children, height = 200 }) => (
@@ -3019,6 +3024,60 @@ function BodyTab({ metrics, profile, setProfile, onAdd, onDelete, workouts, rest
 }
 
 /* ============ APP ============ */
+/* Отдать ссылку другому человеку.
+
+   Изнутри приложения ссылку взять неоткуда: у установленного нет строки
+   адреса, а во вкладке лезть за ней и выделять руками — не то, что делают,
+   когда телефон уже протянут жене.
+
+   Код для камеры стоит первым не для красоты. Ссылка, отправленная в
+   мессенджере, откроется во встроенном окне, а поставить приложение оттуда
+   нельзя — мы это чиним на соседнем экране, но лучше туда не попадать.
+   Наведённая камера открывает основной браузер телефона, то есть сразу
+   то место, где установка работает. */
+function ShareSheet({ onClose, say }) {
+  const url = appUrl();
+  return (
+    <Sheet onClose={onClose}>
+      <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>Поделиться приложением</div>
+      <div className="f-body text-sm mb-3" style={{ color: C.dim }}>
+        Наведи на код камеру телефона — приложение откроется в его браузере, оттуда оно и ставится.
+      </div>
+
+      <div className="flex justify-center mb-3">
+        {/* место под код держим заранее, чтобы лист не подпрыгнул */}
+        <Suspense fallback={<div style={{ width: 232, height: 232, borderRadius: 12, background: C.surfaceHi }} />}>
+          <QrCode text={url} />
+        </Suspense>
+      </div>
+
+      {/* Адрес словами: код читается не всегда, а продиктовать можно всегда. */}
+      <div className="f-num text-2xs text-center mb-3 break-all" style={{ color: C.dim }}>{url.replace(/^https?:\/\//, "")}</div>
+
+      <button
+        onClick={async () => {
+          const r = await shareApp();
+          if (r === "copied") say("Ссылка скопирована");
+          else if (r === "failed") say(url);
+        }}
+        className="f-body w-full rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-2"
+        style={{ background: C.red, color: C.chalk }}>
+        {canShare() ? <><Share2 size={15} /> Отправить ссылку</> : <><Copy size={15} /> Скопировать ссылку</>}
+      </button>
+
+      {/* О подвохе честно и заранее: иначе человек отправит ссылку, тот
+          откроет её прямо в переписке и упрётся в отсутствующую кнопку. */}
+      <div className="f-body text-xs mt-3 leading-relaxed" style={{ color: C.dim }}>
+        Если отправишь ссылку в мессенджере — у получателя она откроется во встроенном окне
+        переписки, а оттуда приложение не поставить. Предупреди, чтобы открыл её в браузере:
+        {isIOS() ? " на iPhone это Safari." : " на андроиде это Chrome."} Код с камерой этого подвоха лишён.
+      </div>
+
+      <button onClick={onClose} className="f-body w-full mt-3 py-3 text-sm" style={{ color: C.dim }}>Закрыть</button>
+    </Sheet>
+  );
+}
+
 /* Установка на телефон.
 
    Держим её отдельным экраном, а не строчкой в настройках, потому что
@@ -3134,6 +3193,7 @@ export default function App() {
   const [setupSeen, setSetupSeen] = useState(true); // до чтения из хранилища не мигаем экраном
   const [showTerms, setShowTerms] = useState(false);
   const [showInstall, setShowInstall] = useState(false);
+  const [showShare, setShowShare] = useState(false);
   /* Полоска-приглашение показывается, пока приложение открыто вкладкой
      и человек её не убрал. Отказ помним: навязываться второй раз незачем. */
   const [installBar, setInstallBar] = useState(() => {
@@ -3451,6 +3511,8 @@ export default function App() {
 
       {showInstall && <InstallSheet onClose={() => setShowInstall(false)} say={say} />}
 
+      {showShare && <ShareSheet onClose={() => setShowShare(false)} say={say} />}
+
       {showTerms && (
         <Sheet onClose={() => setShowTerms(false)}>
           <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>О приложении и ограничениях</div>
@@ -3606,6 +3668,9 @@ export default function App() {
           <button onClick={saveBackupFile} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Share2 size={15} /> Сохранить копию файлом</button>
           <button onClick={async () => { try { await navigator.clipboard.writeText(backupJSON()); say("Копия в буфере обмена"); } catch { setShowSettings(false); setExportText(backupJSON()); } }} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Copy size={15} /> Скопировать копию текстом</button>
           <button onClick={openImport} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Upload size={15} /> Восстановить из копии</button>
+          {/* Ссылку на приложение изнутри взять неоткуда: у установленного нет
+              строки адреса. А отдать её просят чаще, чем что-либо другое. */}
+          <button onClick={() => { setShowSettings(false); setShowShare(true); }} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Share2 size={15} /> Поделиться приложением</button>
           <button onClick={() => { setShowSettings(false); setShowInstall(true); }} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Download size={15} /> {installed() ? "Переустановить приложение" : "Установить на телефон"}</button>
           <button onClick={() => { setShowSettings(false); setShowTerms(true); }} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><FileText size={15} /> О приложении и ограничениях</button>
           {/* «Исходных» дней больше нет — приложение раздаётся пустым. Так что
