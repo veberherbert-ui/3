@@ -7,6 +7,8 @@
 
    Запуск: npm run check */
 
+import { readFileSync } from "node:fs";
+
 const problems = [];
 const fail = (where, what) => problems.push({ where, what });
 
@@ -246,6 +248,45 @@ Object.keys(BW_SHARE).forEach((name) => {
     fail("подсчёт", "пятнадцать по восемьдесят не должны давать максимум выше шести по сто");
   if (calc.est1RM({ sets: [set(15, 80)] }) != null)
     fail("подсчёт", "подходы выше двенадцати повторений в расчёт максимума не берутся");
+}
+
+/* ---- снимки для окна установки ---- */
+/* Манифест обещает браузеру снимки с точными размерами. Обещание, которое
+   не сходится, хром не прощает: он молча отбрасывает весь список и снова
+   предлагает установку узкой полоской — то есть поломка выглядит ровно
+   как её отсутствие, и заметить её на глаз невозможно.
+
+   Требования браузера: файл на месте, размеры совпадают с заявленными,
+   все снимки одного размера, сторона не длиннее другой больше чем в 2,3 раза. */
+{
+  const cfg = readFileSync(new URL("../vite.config.js", import.meta.url), "utf8");
+  const shots = [...cfg.matchAll(/src: "(screenshots\/[^"]+)", sizes: "(\d+)x(\d+)"/g)]
+    .map(([, src, w, h]) => ({ src, w: +w, h: +h }));
+
+  if (!shots.length) fail("установка", "в манифесте нет снимков экрана — хром покажет установку узкой полоской");
+
+  const sizes = new Set();
+  shots.forEach(({ src, w, h }) => {
+    const file = new URL("../public/" + src, import.meta.url);
+    let real;
+    try {
+      const buf = readFileSync(file);
+      /* PNG: ширина и высота лежат в первом блоке, по смещениям 16 и 20 */
+      if (buf.subarray(1, 4).toString() !== "PNG") throw new Error("не PNG");
+      real = { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+    } catch {
+      fail("установка", `снимка ${src} нет или он не читается — обнови их командой npm run shots`);
+      return;
+    }
+    if (real.w !== w || real.h !== h)
+      fail("установка", `${src}: в манифесте ${w}×${h}, на деле ${real.w}×${real.h} — обнови манифест или снимки`);
+    sizes.add(`${real.w}x${real.h}`);
+    const ratio = Math.max(real.w, real.h) / Math.min(real.w, real.h);
+    if (ratio > 2.3) fail("установка", `${src}: соотношение сторон ${ratio.toFixed(2)} — браузер берёт до 2.3`);
+    if (Math.min(real.w, real.h) < 320) fail("установка", `${src}: сторона меньше 320 пикселей — браузер такой снимок не возьмёт`);
+  });
+  if (sizes.size > 1)
+    fail("установка", `снимки разного размера (${[...sizes].join(", ")}) — браузер принимает только одинаковые`);
 }
 
 if (problems.length) {

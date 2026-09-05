@@ -66,10 +66,27 @@ export default defineConfig({
           { src: "icons/icon-512.png", sizes: "512x512", type: "image/png" },
           { src: "icons/icon-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
         ],
+        /* Снимки экрана меняют само окно установки: без них хром на андроиде
+           предлагает установку узкой полоской внизу, которая уезжает через
+           несколько секунд и больше не появляется, а с ними — обычным окном
+           во весь экран, с названием, значком и картинками. Ровно то место,
+           где установка чаще всего и терялась.
+
+           Обновляются командой npm run shots — она снимает живое приложение
+           с заполненным дневником. Все снимки обязаны быть одного размера. */
+        screenshots: [
+          { src: "screenshots/session.png", sizes: "1170x1992", type: "image/png", form_factor: "narrow", label: "Тренировка по плану: что делал в прошлый раз и что пора добавить" },
+          { src: "screenshots/diary.png", sizes: "1170x1992", type: "image/png", form_factor: "narrow", label: "Дневник: тоннаж, история тренировок и календарь" },
+          { src: "screenshots/plan.png", sizes: "1170x1992", type: "image/png", form_factor: "narrow", label: "План: свои дни, база упражнений и инвентарь" },
+        ],
       },
       workbox: {
         /* шрифты лежат локально, поэтому в офлайне доступно всё приложение целиком */
         globPatterns: ["**/*.{js,css,html,svg,png,ico,woff,woff2}"],
+        /* Снимки для окна установки — единственное, что качать заранее не надо:
+           их показывает браузер до установки и всегда по сети, а весят они
+           втрое больше всей остальной графики вместе взятой. */
+        globIgnores: ["**/screenshots/**"],
         navigateFallback: `${base}index.html`,
         cleanupOutdatedCaches: true,
       },

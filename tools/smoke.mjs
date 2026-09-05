@@ -918,6 +918,136 @@ for (const name of ["Тренировка", "План", "Дневник", "Те�
   ok(!over.scroll, `вкладка «${name}» не уезжает вбок`, over.wide.join(" | "));
 }
 
+/* Условия и знакомство в отдельных окнах проходить незачем: они проверены
+   в основном сценарии, а здесь только мешают добраться до сути. */
+const skipIntro = async (pg) => {
+  await pg.evaluate(async () => {
+    const db = await new Promise((r) => { const q = indexedDB.open("iron-diary"); q.onsuccess = () => r(q.result); });
+    const put = (k, v) => new Promise((r) => {
+      const t = db.transaction("kv", "readwrite").objectStore("kv").put(v, k);
+      t.onsuccess = t.onerror = () => r();
+    });
+    await put("accepted", true);
+    await put("setup", true);
+  });
+  await pg.reload({ waitUntil: "networkidle" });
+  await pg.waitForTimeout(1500);
+};
+
+section("Установка на телефон");
+/* Ссылку раздают, а по ссылке приложение открывается вкладкой: без значка,
+   без работы в офлайне и с риском потеряться среди других вкладок. Само по
+   себе это никак не видно, а браузер своё предложение показывает один раз
+   и мельком — люди просто не находили, куда нажимать. */
+await tab("Тренировка");
+const bar = page.getByRole("button", { name: /поставить приложение|Установить на телефон/ }).first();
+ok(await visible(bar), "во вкладке браузера видно приглашение установить");
+
+await bar.click();
+await page.waitForTimeout(600);
+const inst = page.locator("div.rounded-t-2xl").last();
+const instText = await inst.innerText();
+
+/* Путь установки у каждого браузера свой, и пересказывать его своими
+   словами бесполезно: человек ищет глазами точное название пункта меню. */
+const wanted = DEVICE.startsWith("iPhone")
+  ? /На экран .Домой./
+  : /Установить приложение/;
+ok(wanted.test(instText), "названа точная кнопка для этого браузера",
+  instText.split("\n").find((l) => wanted.test(l)) || instText.slice(0, 80));
+ok(/Поделиться|⋮/.test(instText), "сказано, где эту кнопку искать");
+
+/* На чужом телефоне ссылку взять неоткуда, а во встроенном окне мессенджера
+   скопировать её — единственный способ добраться до настоящего браузера. */
+ok(/Скопировать ссылку/.test(instText), "ссылку можно скопировать прямо отсюда");
+
+/* Удаление значка с экрана не стирает скачанную копию приложения: она
+   возвращается при следующей установке — иногда неработоспособной.
+   Отсюда и «переустановил, а всё то же самое». */
+ok(/Скачать приложение заново/.test(instText), "есть переустановка — стереть скачанную копию");
+ok(/Записи.*не пострадают|Записи останутся/.test(instText), "обещано, что дневник уцелеет");
+
+await inst.getByRole("button", { name: "Закрыть" }).click();
+await page.waitForTimeout(500);
+
+/* Приглашение должно убираться навсегда: показывать его каждый запуск тому,
+   кто уже отказался, — это назойливость, а не забота. */
+await page.getByRole("button", { name: "Скрыть приглашение установить" }).click();
+await page.waitForTimeout(400);
+ok(!(await bar.isVisible().catch(() => false)), "приглашение убирается одним нажатием");
+await page.reload({ waitUntil: "networkidle" });
+await page.waitForTimeout(1500);
+ok(!(await bar.isVisible().catch(() => false)), "и не возвращается после перезапуска");
+
+/* Установка остаётся доступной из настроек и после отказа от полоски. */
+await page.getByRole("button", { name: "Настройки" }).click();
+await page.waitForTimeout(500);
+ok(await visible(page.getByRole("button", { name: /Установить на телефон|Переустановить приложение/ })),
+  "установка не потерялась — она есть в настройках");
+await page.getByRole("button", { name: "Закрыть" }).last().click();
+await page.waitForTimeout(400);
+
+/* Переустановка проверяется в отдельном окне: она стирает скачанную копию
+   и перезагружает страницу, а основному сценарию это сломало бы всё
+   дальнейшее. */
+{
+  const freshCtx = await browser.newContext({ ...devices[DEVICE], locale: "ru-RU", timezoneId: TZ });
+  const fresh = await freshCtx.newPage();
+  await fresh.goto(URL, { waitUntil: "networkidle" });
+  await fresh.waitForTimeout(2500);
+  const cachedBefore = await fresh.evaluate(() => caches.keys().then((k) => k.length));
+  ok(cachedBefore > 0, "приложение скачало себя для работы без сети", `хранилищ: ${cachedBefore}`);
+
+  /* Заодно записи послужат уликой: после переустановки они должны остаться. */
+  await skipIntro(fresh);
+  await fresh.getByRole("button", { name: /поставить приложение|Установить на телефон/ }).first().click();
+  await fresh.waitForTimeout(600);
+  /* Первое нажатие взводит и показывает вопрос, второе выполняет: стирание
+     скачанной копии слишком похоже на «удалить всё», чтобы делать его сразу. */
+  await fresh.getByRole("button", { name: /Скачать приложение заново/ }).click();
+  await fresh.waitForTimeout(400);
+  ok(await visible(fresh.getByText(/Скачать приложение заново\? Записи останутся/)),
+    "переустановка сначала спрашивает — и обещает сохранить записи");
+  await fresh.getByRole("button", { name: "Да", exact: true }).click();
+  await fresh.waitForTimeout(3500);
+  ok(/[?&]fresh=/.test(fresh.url()), "переустановка перезапускает приложение мимо кеша", fresh.url().replace(URL, "/"));
+  const swAfter = await fresh.evaluate(() => navigator.serviceWorker.getRegistrations().then((r) => r.length));
+  const dataAfter = await fresh.evaluate(async () => {
+    const db = await new Promise((r) => { const q = indexedDB.open("iron-diary"); q.onsuccess = () => r(q.result); });
+    return new Promise((r) => { const t = db.transaction("kv").objectStore("kv").get("accepted"); t.onsuccess = () => r(t.result); });
+  });
+  ok(dataAfter === true, "записи переустановку пережили");
+  ok(swAfter <= 1, "старая копия приложения не осталась висеть", `обработчиков: ${swAfter}`);
+  await freshCtx.close();
+}
+
+/* Ссылку присылают в мессенджере, и открывается она во встроенном окне —
+   а в нём установки нет ни на одной системе. Именно так приложение чаще
+   всего и «не встаёт»: человек ищет кнопку, которой в этом окне
+   не существует, и решает, что сломано приложение.
+
+   Проверяем на настоящих строках браузера: телеграм на iPhone
+   (притворяется сафари, но без «Version/»), встроенное окно андроида
+   (помечено « wv») и хром на iPhone (установка есть, но не всегда). */
+for (const [who, agent, want] of [
+  ["телеграм на iPhone", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148", /Открыть в Safari/],
+  ["встроенное окно андроида", "Mozilla/5.0 (Linux; Android 13; SM-S901B Build/TP1A; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/120.0.0.0 Mobile Safari/537.36", /Открыть в браузере/],
+  ["хром на iPhone", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/126.0 Mobile/15E148 Safari/604.1", /На экран .Домой./],
+]) {
+  const c = await browser.newContext({ ...devices[DEVICE], userAgent: agent, locale: "ru-RU", timezoneId: TZ });
+  const pg = await c.newPage();
+  await pg.goto(URL, { waitUntil: "networkidle" });
+  await pg.waitForTimeout(2000);
+  await skipIntro(pg);
+  await pg.getByRole("button", { name: /поставить приложение|Установить на телефон/ }).first().click();
+  await pg.waitForTimeout(600);
+  const t = await pg.locator("div.rounded-t-2xl").last().innerText();
+  ok(want.test(t), `совет по делу: ${who}`, t.split("\n").find((l) => want.test(l)) || t.slice(0, 70));
+  if (/wv|Mobile\/15E148$/.test(agent))
+    ok(/установить отсюда нельзя|Отсюда установить нельзя/.test(t), `сказано прямо, что здесь не выйдет: ${who}`);
+  await c.close();
+}
+
 section("Читаемость и доступность");
 const a11y = await page.evaluate(() => {
   const small = [], tiny = [], noLabel = [];

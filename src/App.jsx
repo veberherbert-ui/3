@@ -28,6 +28,7 @@ import { isIOS, isAndroid } from "./lib/platform.js";
 import { adaptPreset, similarTo, byFit } from "./lib/fitplan.js";
 import { useWakeLock } from "./lib/wakelock.js";
 import { buildLabel, installed, checkForUpdate, reloadOnUpdate } from "./lib/update.js";
+import { installPlan, promptInstall, canPrompt, onInstallable, hardReset, browserKind } from "./lib/install.js";
 import { useAppearance, TEXT_SIZES } from "./lib/appearance.js";
 import DisclaimerGate, { DisclaimerBody } from "./Disclaimer.jsx";
 import SetupGate from "./Setup.jsx";
@@ -3018,6 +3019,90 @@ function BodyTab({ metrics, profile, setProfile, onAdd, onDelete, workouts, rest
 }
 
 /* ============ APP ============ */
+/* Установка на телефон.
+
+   Держим её отдельным экраном, а не строчкой в настройках, потому что
+   рассказать надо разное в зависимости от того, откуда человек пришёл:
+   в одном браузере есть кнопка, в другом — пункт меню под своим именем,
+   а во встроенном окне мессенджера установки нет вообще, и единственный
+   полезный совет — открыть ссылку снаружи. */
+function InstallSheet({ onClose, say }) {
+  const [, bump] = useState(0);
+  useEffect(() => onInstallable(() => bump((n) => n + 1)), []);
+  const plan = installPlan();
+
+  return (
+    <Sheet onClose={onClose}>
+      <div className="f-display text-base font-semibold mb-1" style={{ color: C.chalk }}>{plan.title}</div>
+      <div className="f-body text-sm leading-relaxed mb-3" style={{ color: plan.state === "manual" && browserKind() === "inapp" ? C.chalk : C.dim }}>{plan.note}</div>
+
+      {plan.state === "prompt" && (
+        <button
+          onClick={async () => {
+            const r = await promptInstall();
+            if (r === "accepted") { say("Готово — значок появится на экране"); onClose(); }
+            else if (r === "dismissed") say("Установка отменена — можно вернуться сюда позже");
+            else say("Браузер не дал установить — попробуй через меню");
+          }}
+          className="f-body w-full rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-2"
+          style={{ background: C.red, color: C.chalk }}>
+          <Download size={15} /> Установить
+        </button>
+      )}
+
+      {plan.steps.length > 0 && (
+        <ol className="mb-1">
+          {plan.steps.map((t, i) => (
+            <li key={i} className="flex gap-2.5 py-1.5" style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
+              <span className="f-num shrink-0 rounded-full flex items-center justify-center text-2xs"
+                style={{ width: 20, height: 20, marginTop: 1, background: C.surfaceHi, color: C.dim }}>{i + 1}</span>
+              <span className="f-body text-sm leading-snug" style={{ color: C.chalk }}>{t}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+
+      {/* Ссылку надо дать скопировать всегда: в мессенджере это
+          единственный способ добраться до настоящего браузера, а на
+          чужом телефоне её просто неоткуда взять. */}
+      {plan.state !== "installed" && (
+        <button
+          onClick={async () => {
+            try { await navigator.clipboard.writeText(window.location.origin + window.location.pathname); say("Ссылка скопирована"); }
+            catch { say(window.location.host); }
+          }}
+          className="f-body w-full mt-2 rounded-xl py-3 text-sm flex items-center justify-center gap-2"
+          style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
+          <Copy size={15} /> Скопировать ссылку
+        </button>
+      )}
+
+      {/* Переустановка.
+
+          Удаление значка с экрана не стирает скачанную копию приложения:
+          она остаётся в браузере и при повторной установке возвращается
+          как была — иногда неработоспособной. Отсюда и «переустановил,
+          а всё то же самое». Эта кнопка убирает именно копию. */}
+      <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${C.line}` }}>
+        <div className="f-body text-xs mb-2 leading-relaxed" style={{ color: C.dim }}>
+          Переустановка не помогает? Значок можно удалить, а скачанная копия приложения
+          остаётся в браузере и возвращается при следующей установке. Кнопка ниже стирает
+          её и качает заново. Записи дневника лежат отдельно и не пострадают.
+        </div>
+        <ConfirmButton
+          onConfirm={() => { say("Качаю заново…"); hardReset(); }}
+          question="Скачать приложение заново? Записи останутся"
+          className="f-body w-full rounded-xl py-3 text-sm flex items-center justify-center gap-2"
+          style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
+          <RefreshCw size={15} /> Скачать приложение заново
+        </ConfirmButton>
+      </div>
+
+      <button onClick={onClose} className="f-body w-full mt-3 py-3 text-sm" style={{ color: C.dim }}>Закрыть</button>
+    </Sheet>
+  );
+}
+
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState("session");
@@ -3048,6 +3133,15 @@ export default function App() {
   const [accepted, setAccepted] = useState(null); // null — ещё не прочитали из хранилища
   const [setupSeen, setSetupSeen] = useState(true); // до чтения из хранилища не мигаем экраном
   const [showTerms, setShowTerms] = useState(false);
+  const [showInstall, setShowInstall] = useState(false);
+  /* Полоска-приглашение показывается, пока приложение открыто вкладкой
+     и человек её не убрал. Отказ помним: навязываться второй раз незачем. */
+  const [installBar, setInstallBar] = useState(() => {
+    try { return !installed() && localStorage.getItem("iron-install-hidden") !== "1"; } catch { return !installed(); }
+  });
+  /* Кнопка установки от браузера приходит с задержкой — надо перерисоваться. */
+  const [, bumpInstall] = useState(0);
+  useEffect(() => onInstallable(() => bumpInstall((n) => n + 1)), []);
   const [pairFixed, setPairFixed] = useState(0);
   const [updating, setUpdating] = useState(false);
   const fileInput = useRef(null);
@@ -3284,6 +3378,35 @@ export default function App() {
         </div>
       </div>
 
+      {/* Приглашение установить.
+
+          Раздача идёт ссылкой, а по ссылке приложение открывается вкладкой:
+          без значка на экране, без работы в офлайне и с риском потеряться
+          среди других вкладок. Само по себе это никак не видно, а браузер
+          своё предложение показывает один раз и мельком. Поэтому строка
+          здесь — и её можно убрать навсегда одним нажатием. */}
+      {/* Во время тренировки полоски нет: она отнимает у экрана целую строку
+          там, где на счету каждая, а ставить приложение посреди подхода
+          всё равно никто не будет. */}
+      {installBar && !session && (
+        <div className="w-full max-w-xl mx-auto px-4 pb-1 shrink-0">
+          {/* Обе половины — полноразмерные кнопки: и приглашение, и отказ.
+              Полоска от этого ровно в одну цель высотой, без лишних отступов. */}
+          <div className="flex items-center rounded-xl pl-1 pr-1" style={{ background: C.surfaceHi, border: `1px solid ${C.line}` }}>
+            <button onClick={() => setShowInstall(true)}
+              className="f-body flex-1 min-w-0 flex items-center gap-2 px-2 text-left text-xs leading-snug" style={{ color: C.chalk }}>
+              <Download size={15} color={C.mustard} className="shrink-0" />
+              <span className="truncate">{canPrompt() ? "Установить на телефон — работает без сети" : "Как поставить приложение на телефон"}</span>
+            </button>
+            <button
+              onClick={() => { setInstallBar(false); try { localStorage.setItem("iron-install-hidden", "1"); } catch { /* приватный режим */ } }}
+              aria-label="Скрыть приглашение установить" className="shrink-0 flex items-center justify-center">
+              <X size={15} color={C.dim} />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* overscrollBehavior останавливает сцепку прокрутки прямо здесь: до body
           она тогда не доходит, и «потяни вниз, чтобы обновить» не сработает
           даже если список уже в самом верху. */}
@@ -3325,6 +3448,8 @@ export default function App() {
           <button onClick={() => setExportText(null)} className="f-body w-full mt-1 py-3 text-sm" style={{ color: C.dim }}>Закрыть</button>
         </Sheet>
       )}
+
+      {showInstall && <InstallSheet onClose={() => setShowInstall(false)} say={say} />}
 
       {showTerms && (
         <Sheet onClose={() => setShowTerms(false)}>
@@ -3481,6 +3606,7 @@ export default function App() {
           <button onClick={saveBackupFile} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Share2 size={15} /> Сохранить копию файлом</button>
           <button onClick={async () => { try { await navigator.clipboard.writeText(backupJSON()); say("Копия в буфере обмена"); } catch { setShowSettings(false); setExportText(backupJSON()); } }} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Copy size={15} /> Скопировать копию текстом</button>
           <button onClick={openImport} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Upload size={15} /> Восстановить из копии</button>
+          <button onClick={() => { setShowSettings(false); setShowInstall(true); }} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><Download size={15} /> {installed() ? "Переустановить приложение" : "Установить на телефон"}</button>
           <button onClick={() => { setShowSettings(false); setShowTerms(true); }} className="f-body w-full rounded-xl py-3 text-sm mb-2 flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}><FileText size={15} /> О приложении и ограничениях</button>
           {/* «Исходных» дней больше нет — приложение раздаётся пустым. Так что
               это уже не сброс к чему-то, а честное удаление своих дней. */}
