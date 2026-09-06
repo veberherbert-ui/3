@@ -72,10 +72,20 @@ const JS_NOTE = [
   ["replaceAll(", "Safari 13.1"],
   ["Promise.any", "Safari 14"],
 ];
+
+/* Дописанное вручную. Полифил снимает вопрос целиком: возможность есть
+   всюду, где приложение вообще запускается, — и отчёт не должен пугать
+   тем, что уже решено. Ищем по строке, которую оставляет сжатие
+   (см. src/main.jsx). */
+const all = js.map((f) => readFileSync(join(DIR, f), "utf8")).join("\n");
+const FILLED = [["Object.hasOwn", 'defineProperty(Object,"hasOwn"']];
+const filled = new Set(FILLED.filter(([, mark]) => all.includes(mark)).map(([name]) => name));
+
 const notes = [];
 js.forEach((f) => {
   const src = readFileSync(join(DIR, f), "utf8");
   JS_NOTE.forEach(([needle, since]) => {
+    if (filled.has(needle)) return;
     const n = src.split(needle).length - 1;
     if (n) notes.push(`${f}: ${needle} ×${n} — с ${since}`);
   });
@@ -125,6 +135,7 @@ console.log(
   `✓ Сборка по планке: код разбирается с es2018, оформление работает с Safari 14.1 ` +
     `(${js.length} ${js.length === 1 ? "файл" : "файлов"} кода, ${css.length} оформления).`
 );
+if (filled.size) console.log(`  Дописано вручную, планку не поднимает: ${[...filled].join(", ")}`);
 if (notes.length) {
   console.log("  Требует браузера посвежее — держим под оградой:");
   notes.forEach((n) => console.log(`    ${n}`));

@@ -9,6 +9,7 @@
    в сборку приложения они не попадают, но после свежего клона проверка
    работает без отдельной установки. Браузер качается один раз:
    npx playwright install chromium
+   Другие движки — по желанию: npx playwright install webkit firefox
 
    Однажды они стояли неучтёнными, и первая же установка любого пакета
    вымела их из node_modules вместе с возможностью что-либо проверить.
@@ -19,9 +20,25 @@
 
 const URL = process.env.SMOKE_URL || "http://127.0.0.1:4173/";
 
-let chromium, devices, PNG, jsQR;
+/* Каким движком проверять.
+
+   По умолчанию Chromium — он единственный, который ставится в среде сборки.
+   Но выводы про Safari и Firefox, сделанные по таблицам поддержки, выводами
+   и остаются: они говорят, каких возможностей коду хватает, а не как код
+   себя на них ведёт. Поэтому переключатель — чтобы там, где движки доступны,
+   набор гонялся на них без правок:
+
+     SMOKE_ENGINE=webkit  node tools/smoke.mjs     — движок Safari
+     SMOKE_ENGINE=firefox node tools/smoke.mjs     — движок Firefox
+
+   Сначала один раз: npx playwright install webkit firefox */
+const ENGINE = process.env.SMOKE_ENGINE || "chromium";
+
+let engines, devices, PNG, jsQR;
 try {
-  ({ chromium, devices } = await import("playwright"));
+  const pw = await import("playwright");
+  engines = { chromium: pw.chromium, webkit: pw.webkit, firefox: pw.firefox };
+  devices = pw.devices;
   /* Код для камеры проверяется тем же способом, каким его прочитает
      человек: снимок — в разбор. Отсюда два маленьких помощника. */
   ({ PNG } = await import("pngjs"));
@@ -51,7 +68,23 @@ const visible = async (loc, ms = 8000) => {
   }
 };
 
-const browser = await chromium.launch();
+if (!engines[ENGINE]) {
+  console.error(`Неизвестный движок: ${ENGINE}. Бывают: ${Object.keys(engines).join(", ")}`);
+  process.exit(2);
+}
+let browser;
+try {
+  browser = await engines[ENGINE].launch();
+} catch (e) {
+  console.error(`Движок ${ENGINE} не установлен: npx playwright install ${ENGINE}`);
+  console.error(String(e).split("\n")[0]);
+  process.exit(2);
+}
+
+/* Отключить служебный поток умеет только Chromium. На других движках
+   проверки, которым нужна чистая страница без кеша, работают иначе —
+   см. места, где спрашивают noSW. */
+const noSW = ENGINE === "chromium" ? { serviceWorkers: "block" } : {};
 const TZ = "Europe/Moscow";
 /* Прогон идёт и на айфоне, и на андроиде: SMOKE_DEVICE выбирает какой.
    Движок один и тот же, а вот размер экрана, плотность пикселей и набор
@@ -130,7 +163,7 @@ await page.addInitScript(() => {
 await page.goto(URL, { waitUntil: "networkidle" });
 await page.waitForTimeout(1200);
 
-console.log(`\nУстройство: ${DEVICE}`);
+console.log(`\nУстройство: ${DEVICE} · движок: ${ENGINE}`);
 section("Загрузка и вкладки");
 ok((await page.title()) === "Железный дневник", "заголовок страницы");
 
@@ -1012,7 +1045,7 @@ section("Когда ломается один кусок");
 
    Ломаем ровно то, что ломается в жизни: кусок с графиками не загрузился. */
 {
-  const brokeCtx = await browser.newContext({ ...devices[DEVICE], locale: "ru-RU", timezoneId: TZ, serviceWorkers: "block" });
+  const brokeCtx = await browser.newContext({ ...devices[DEVICE], locale: "ru-RU", timezoneId: TZ, ...noSW });
   const bp = await brokeCtx.newPage();
   await bp.route("**/assets/Charts-*.js", (r) => r.abort());
   await bp.goto(URL, { waitUntil: "networkidle" });
@@ -1263,7 +1296,7 @@ ok(!(await page.locator("#crash").isVisible()), "при исправной ра�
 
    Чистое окружение: в основном контексте служебный поток уже стоит
    и отдаёт файл из кеша в обход оборванного запроса. */
-const brokenCtx = await browser.newContext({ ...devices[DEVICE], locale: "ru-RU", serviceWorkers: "block" });
+const brokenCtx = await browser.newContext({ ...devices[DEVICE], locale: "ru-RU", ...noSW });
 const broken = await brokenCtx.newPage();
 let tries = 0;
 await broken.route("**/assets/index-*.js", (r) => { tries++; r.abort(); });
