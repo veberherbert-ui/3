@@ -68,6 +68,17 @@ const errors = [];
 page.on("pageerror", (e) => errors.push("PAGEERROR: " + e.message));
 page.on("console", (m) => { if (m.type() === "error") errors.push("CONSOLE: " + m.text()); });
 
+/* Какие куски шрифтов браузер попросил и что получил.
+
+   Предзагрузка намеренно урезана до latin и cyrillic (см. globIgnores
+   в vite.config.js), и урезать её легко переусердствовать: недостающий
+   кусок не роняет приложение, а тихо подменяет шрифт системным — на глаз
+   заметит только тот, кто знает, куда смотреть. Поэтому смотрим сюда. */
+const fontHits = [];
+page.on("response", (r) => {
+  if (/\.woff2?(\?|$)/.test(r.url())) fontHits.push({ status: r.status(), file: r.url().split("/").pop() });
+});
+
 const dbRead = (key) => page.evaluate(async (k) => {
   const db = await new Promise((r) => { const q = indexedDB.open("iron-diary"); q.onsuccess = () => r(q.result); });
   return new Promise((r) => { const t = db.transaction("kv").objectStore("kv").get(k); t.onsuccess = () => r(t.result); });
@@ -795,12 +806,27 @@ ok((await dbRead("workouts"))?.length === beforeBackup, "копия восста
 section("Работа без сети");
 await page.waitForFunction(() => navigator.serviceWorker?.controller !== null, null, { timeout: 20000 }).catch(() => {});
 await page.waitForTimeout(2500);
-const cached = await page.evaluate(async () => {
-  let n = 0;
-  for (const k of await caches.keys()) n += (await (await caches.open(k)).keys()).length;
-  return n;
+/* Проверяем не количество, а состав.
+
+   Раньше здесь стояло «больше пятидесяти файлов» — и проверка сломалась
+   в тот день, когда список предзагрузки урезали с 116 записей до 35,
+   то есть ровно тогда, когда всё стало лучше. Число ничего не говорит
+   о работоспособности: важно, что в кеше лежит именно то, без чего
+   приложение не откроется. */
+const cachedUrls = await page.evaluate(async () => {
+  const out = [];
+  for (const k of await caches.keys()) {
+    for (const r of await (await caches.open(k)).keys()) out.push(r.url);
+  }
+  return out;
 });
-ok(cached > 50, "приложение закешировано целиком", `${cached} файлов`);
+const has = (re) => cachedUrls.filter((u) => re.test(u)).length;
+ok(has(/index\.html|\/$/) > 0, "страница закеширована — без неё не откроется вовсе");
+ok(has(/\.js(\?|$)/) > 0, "код закеширован", `файлов: ${has(/\.js(\?|$)/)}`);
+ok(has(/\.css(\?|$)/) > 0, "оформление закешировано");
+ok(has(/\.woff2(\?|$)/) >= 3, "шрифты закешированы — все три семейства", `кусков: ${has(/\.woff2(\?|$)/)}`);
+ok(has(/manifest\.webmanifest/) > 0, "манифест закеширован — приложение остаётся установленным");
+ok(cachedUrls.length > 0, "всего в кеше", `${cachedUrls.length} файлов`);
 
 await ctx.setOffline(true);
 await page.reload({ waitUntil: "domcontentloaded" });
@@ -942,6 +968,37 @@ const skipIntro = async (pg) => {
   await pg.reload({ waitUntil: "networkidle" });
   await pg.waitForTimeout(1500);
 };
+
+section("Шрифты");
+/* Первая установка качала 99 файлов шрифтов на 1,2 МБ — больше половины
+   всего приложения. Греческий, вьетнамский и расширенная латиница в русском
+   дневнике не нарисуют ни одного знака, а старый формат woff — дубль к woff2
+   для браузеров до Safari 10 при нашей планке 14.1. */
+await tab("План");
+await page.waitForTimeout(700);
+await tab("Тело");
+await page.waitForTimeout(700);
+
+ok(fontHits.length > 0, "шрифты приложения подгружены", `файлов: ${fontHits.length}`);
+const badStatus = fontHits.filter((f) => f.status >= 400);
+ok(badStatus.length === 0, "ни один кусок шрифта не потерялся",
+  badStatus.map((f) => `${f.status} ${f.file}`).join(", ") || "все отдались");
+const stray = fontHits.filter((f) => !/-(latin|cyrillic)-/.test(f.file) || f.file.endsWith(".woff"));
+ok(stray.length === 0, "лишние наборы знаков не качаются", stray.map((f) => f.file).join(", ") || "только latin и cyrillic, только woff2");
+
+/* Три семейства: заголовки, текст и цифры. Если какое-то не доехало,
+   надпись останется на месте — но нарисуется системным шрифтом. */
+const families = await page.evaluate(() => {
+  const seen = new Set();
+  document.querySelectorAll("h1, .f-display, .f-body, .f-num").forEach((el) => {
+    seen.add(getComputedStyle(el).fontFamily.split(",")[0].replace(/['"]/g, "").trim());
+  });
+  return [...seen];
+});
+["Oswald", "Inter", "JetBrains Mono"].forEach((f) => {
+  ok(families.includes(f), `${f} на месте`, families.join(" · "));
+});
+ok(await page.evaluate(() => document.fonts.status) === "loaded", "браузер догрузил всё, что просил");
 
 section("Когда ломается один кусок");
 /* Раньше ошибка в любом месте сносила всё дерево: React размонтировал
