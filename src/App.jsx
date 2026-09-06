@@ -17,7 +17,7 @@ import {
 import { loadKey, saveKey, deleteKey, requestPersistence, storageEstimate } from "./lib/storage.js";
 import { fillPairFlags } from "./lib/migrate.js";
 import { useDragOrder, moveItem } from "./lib/reorder.js";
-import { shareOrDownload, readFileAsText, backupName } from "./lib/backup.js";
+import { shareOrDownload, readFileAsText, backupName, parseBackup, sanitizeStored } from "./lib/backup.js";
 import { restFor, fmtRest, stepRest } from "./lib/rest.js";
 import { workoutEnergy } from "./lib/energy.js";
 import { summary, movers, weeklyVolume, muscleWeek, compare, weightAdvice, rmDoubtful, painFlag } from "./lib/progress.js";
@@ -33,6 +33,7 @@ import { shareApp, canShare, appUrl } from "./lib/share.js";
 import { useAppearance, TEXT_SIZES } from "./lib/appearance.js";
 import DisclaimerGate, { DisclaimerBody } from "./Disclaimer.jsx";
 import SetupGate from "./Setup.jsx";
+import { readRawStorage } from "./Rescue.jsx";
 
 /* Графики грузятся отдельным куском: библиотека тяжёлая, а нужна только
    на двух вкладках из пяти. */
@@ -3239,6 +3240,21 @@ export default function App() {
   const [session, setSessionState] = useState(null);
   const [profile, setProfileState] = useState({ height: "", age: "", sex: "m", activity: "1.55", conditions: [] });
   useEffect(() => { scroller.current?.scrollTo(0, 0); }, [shownTab, session?.id]);
+
+  /* Приложение объявляет, что вправду нарисовалось.
+
+     Страница снаружи (index.html) следит, поднялось ли оно, и раньше
+     считала признаком жизни наличие любого элемента в корне. Признак
+     оказался ложным: когда отрисовка падала на полпути, React оставлял
+     в корне пустую обёртку — предохранитель видел «ребёнок есть, всё
+     хорошо» и молчал, а человек смотрел на пустой экран. Явная отметка
+     врать не умеет. */
+  useEffect(() => {
+    document.documentElement.dataset.ready = "1";
+    /* Снимать её при размонтировании нельзя: размонтирование как раз
+       и происходит при падении, а тогда отметку ставит спасательный
+       экран — и снятая на выходе она затёрла бы его сигнал. */
+  }, []);
   const [showSettings, setShowSettings] = useState(false);
   const [exportText, setExportText] = useState(null);
   const [importText, setImportText] = useState(null);
@@ -3260,28 +3276,68 @@ export default function App() {
   const [, bumpInstall] = useState(0);
   useEffect(() => onInstallable(() => bumpInstall((n) => n + 1)), []);
   const [pairFixed, setPairFixed] = useState(0);
+  /* Сколько записей не прочиталось при запуске. -1 — хранилище не открылось. */
+  const [brokenCount, setBrokenCount] = useState(0);
   const [updating, setUpdating] = useState(false);
   const fileInput = useRef(null);
 
   useEffect(() => {
     (async () => {
-      /* Записи, сделанные до правила «две гантели», считались вполовину.
-         Доводим до общего знаменателя один раз и говорим об этом вслух:
-         цифры в журнале поменяются, и человек должен понимать почему. */
-      const { workouts: fixed, touched } = fillPairFlags((await loadKey("workouts")) || []);
-      setWorkouts(fixed);
-      if (touched) { saveKey("workouts", fixed); setPairFixed(touched); }
-      setMetrics((await loadKey("metrics")) || []);
-      const d = await loadKey("days");
-      if (d && d.length) setDaysState(d); else { setDaysState(DEFAULT_DAYS); saveKey("days", DEFAULT_DAYS); }
-      setSessionState(await loadKey("session"));
-      const p = await loadKey("profile"); if (p) setProfileState(p);
-      setAccepted(!!(await loadKey("accepted")));
-      setSetupSeen(!!(await loadKey("setup")));
-      setLoading(false);
+      /* Прочитанное из хранилища проверяется так же, как чужой файл.
+
+         Довериться ему было дорого: одного поля не того вида хватало,
+         чтобы приложение зависло на заставке навсегда. Причём не упало —
+         тогда сработала бы ограда, — а именно зависло, потому что сбой
+         случался здесь, в асинхронной загрузке, где ловить его нечем.
+
+         Испорченные записи не показываются, но и не стираются: хранилище
+         отсюда не переписывается, и достать их целиком всегда можно через
+         спасательный экран. */
+      let broken = 0;
+      try {
+        const w = sanitizeStored("workouts", await loadKey("workouts"));
+        broken += w.dropped;
+        /* Записи, сделанные до правила «две гантели», считались вполовину.
+           Доводим до общего знаменателя один раз и говорим об этом вслух:
+           цифры в журнале поменяются, и человек должен понимать почему. */
+        const { workouts: fixed, touched } = fillPairFlags(w.list);
+        setWorkouts(fixed);
+        if (touched && !w.dropped) { saveKey("workouts", fixed); setPairFixed(touched); }
+
+        const m = sanitizeStored("metrics", await loadKey("metrics"));
+        broken += m.dropped;
+        setMetrics(m.list);
+
+        const d = sanitizeStored("days", await loadKey("days"));
+        broken += d.dropped;
+        if (d.list.length) setDaysState(d.list);
+        else { setDaysState(DEFAULT_DAYS); if (!d.dropped) saveKey("days", DEFAULT_DAYS); }
+
+        setSessionState(await loadKey("session"));
+        const p = await loadKey("profile");
+        if (p && typeof p === "object" && !Array.isArray(p)) setProfileState(p);
+        setAccepted(!!(await loadKey("accepted")));
+        setSetupSeen(!!(await loadKey("setup")));
+      } catch (e) {
+        /* Читать не вышло вовсе — приватный режим, переполненный диск,
+           закрытое хранилище. Пустой дневник лучше вечной заставки:
+           человек хотя бы попадёт в приложение и увидит объяснение. */
+        console.error("не удалось прочитать хранилище:", e);
+        broken = -1;
+      } finally {
+        /* Обязательно: без этого любая осечка выше оставляла человека
+           на крутящейся гантели навсегда. */
+        setLoading(false);
+      }
+      if (broken) setBrokenCount(broken);
+
       /* просим браузер закрепить хранилище, чтобы он не вычистил дневник при нехватке места */
-      const persisted = await requestPersistence();
-      setStorageInfo({ persisted, ...((await storageEstimate()) || {}) });
+      try {
+        const persisted = await requestPersistence();
+        setStorageInfo({ persisted, ...((await storageEstimate()) || {}) });
+      } catch {
+        /* не сказал — и ладно, это только строчка в настройках */
+      }
     })();
   }, []);
 
@@ -3390,24 +3446,24 @@ export default function App() {
 
   const backupJSON = () => JSON.stringify({ v: 1, workouts, metrics, days, profile }, null, 0);
 
+  /* Восстановление — единственное место, куда попадают данные, которых
+     приложение не создавало. Писать их в хранилище как есть нельзя:
+     повреждённая запись переживает и перезагрузку, и переустановку —
+     они намеренно не трогают дневник, — и приложение перестаёт
+     открываться навсегда. Разбор с проверкой в lib/backup.js. */
   const doImport = (txt) => {
-    let o;
-    try {
-      o = JSON.parse(txt);
-    } catch {
-      setImportError("Это не похоже на резервную копию. Нужен файл целиком или весь скопированный текст.");
-      return;
-    }
-    if (!o || typeof o !== "object" || !(o.workouts || o.metrics || o.days || o.profile)) {
-      setImportError("Файл прочитался, но записей дневника в нём нет.");
-      return;
-    }
+    const res = parseBackup(txt);
+    if (!res.ok) { setImportError(res.error); return; }
+    const o = res.data;
     if (o.workouts) { setWorkouts(o.workouts); saveKey("workouts", o.workouts); }
     if (o.metrics) { setMetrics(o.metrics); saveKey("metrics", o.metrics); }
     if (o.days) { setDaysState(o.days); saveKey("days", o.days); }
     if (o.profile) { setProfileState(o.profile); saveKey("profile", o.profile); }
     setImportError(null); setImportText(null); setShowSettings(false);
-    say(`Восстановлено: тренировок ${o.workouts?.length || 0}, замеров ${o.metrics?.length || 0}`);
+    say(
+      `Восстановлено: тренировок ${o.workouts?.length || 0}, замеров ${o.metrics?.length || 0}` +
+        (res.dropped ? ` · не прочиталось записей: ${res.dropped}` : "")
+    );
   };
 
   /* Сохранение копии файлом: на iPhone открывается системное «Поделиться» → «Сохранить в Файлы» */
@@ -3759,6 +3815,47 @@ export default function App() {
 
       {/* невидимый выбор файла — открывает «Файлы» на iPhone и проводник на компьютере */}
       <input ref={fileInput} type="file" accept="application/json,.json,text/plain" onChange={pickBackupFile} className="hidden" />
+
+      {/* Часть записей не прочиталась.
+
+          Молчать об этом нельзя ни в коем случае: человек увидит дневник
+          короче, чем помнит, и решит, что записи пропали. Они не пропали —
+          лежат в хранилище как есть, приложение просто не смогло их разобрать
+          и намеренно ничего не переписало. Поэтому первым делом предлагаем
+          забрать всё содержимое целиком, до того как обычная работа
+          затрёт его поверх. */}
+      {brokenCount !== 0 && (
+        <Sheet onClose={() => setBrokenCount(0)}>
+          <div className="f-display text-base font-semibold mb-2" style={{ color: C.chalk }}>
+            {brokenCount === -1 ? "Не удалось открыть хранилище" : "Часть записей не прочиталась"}
+          </div>
+          <div className="f-body text-sm leading-relaxed mb-3" style={{ color: C.chalk }}>
+            {brokenCount === -1
+              ? "Дневник не открылся — так бывает в приватном режиме браузера или когда на устройстве кончилось место. Приложением можно пользоваться, но записи сейчас не сохранятся."
+              : `Записей не прочиталось: ${brokenCount}. Они никуда не делись — лежат в хранилище как есть, приложение их не стирало и не переписывало. В журнале их пока не видно.`}
+          </div>
+          {brokenCount !== -1 && (
+            <>
+              <div className="f-body text-xs mb-3 leading-relaxed" style={{ color: C.dim }}>
+                Забери всё содержимое хранилища целиком, пока обычная работа не легла поверх. Этот файл можно прислать мне — по нему видно, что именно не разобралось.
+              </div>
+              <button
+                onClick={async () => {
+                  const raw = await readRawStorage();
+                  const res = await shareOrDownload(backupName("json"), JSON.stringify(raw));
+                  if (res === "copied") say("Содержимое в буфере обмена");
+                  else if (res === "failed") say("Сохранить не вышло");
+                  else say("Копия сохранена");
+                }}
+                className="f-body w-full rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-2"
+                style={{ background: C.red, color: C.chalk }}>
+                <Download size={15} /> Сохранить всё содержимое
+              </button>
+            </>
+          )}
+          <button onClick={() => setBrokenCount(0)} className="f-body w-full mt-2 py-3 text-sm" style={{ color: C.dim }}>Понятно</button>
+        </Sheet>
+      )}
 
       {/* Пересчёт трогает уже записанное — об этом нельзя молчать
           и нельзя сказать исчезающей подсказкой. */}

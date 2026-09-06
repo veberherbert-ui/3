@@ -72,6 +72,30 @@ if (!engines[ENGINE]) {
   console.error(`Неизвестный движок: ${ENGINE}. Бывают: ${Object.keys(engines).join(", ")}`);
   process.exit(2);
 }
+/* Раздача с настоящими заголовками.
+
+   Проверять приложение без них — значит не проверять политику содержимого,
+   а она уже дважды ловила настоящие поломки: вшитые в стили шрифты и звук
+   сигнала, который собирается в памяти. Политика, которую никто не гонял,
+   опаснее её отсутствия: она либо не защищает, либо тихо ломает то,
+   что заметят уже люди.
+
+   Поэтому если по адресу никто не отвечает — поднимаем свой сервер,
+   который читает dist/_headers и отдаёт ровно то же, что Cloudflare. */
+let ownServer = null;
+const alive = await fetch(URL).then(() => true).catch(() => false);
+if (!alive) {
+  const { spawn } = await import("node:child_process");
+  /* URL здесь — наша строка адреса, а не встроенный разборщик: он ею
+     же и перекрыт. Порт достаём без него. */
+  const port = URL.match(/:(\d+)/)?.[1] || "4173";
+  ownServer = spawn(process.execPath, ["tools/serve.mjs", port], { stdio: "ignore" });
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 250));
+    if (await fetch(URL).then(() => true).catch(() => false)) break;
+  }
+}
+
 let browser;
 try {
   browser = await engines[ENGINE].launch();
@@ -1002,6 +1026,113 @@ const skipIntro = async (pg) => {
   await pg.waitForTimeout(1500);
 };
 
+section("Враждебная резервная копия");
+/* Единственное место, куда в приложение попадают данные, которых оно
+   не создавало. Раньше их писали в хранилище как есть, и этого хватало,
+   чтобы убить дневник насовсем: одно поле не того вида — и приложение
+   вечно висело на заставке, причём повреждённая запись переживала
+   и перезагрузку, и переустановку.
+
+   Выполнить чужой код так нельзя ни при каком раскладе — React экранирует
+   строки, JSON.parse не создаёт прототипов, — но прислать другу «копию
+   тренировок», после которой у него перестанет открываться дневник,
+   было вполне возможно. */
+{
+  const hostile = [
+    ["список записей — не список", { v: 1, workouts: "не массив" }, "отказ"],
+    ["сведения о себе — строка", { v: 1, profile: "я строка", workouts: [] }, "отказ"],
+    ["все даты испорчены", { v: 1, workouts: [{ id: "x", date: "не дата", exercises: [] }] }, "отказ"],
+    ["попытка подменить прототип", JSON.parse('{"v":1,"profile":{"__proto__":{"ВЗЛОМАН":true}},"workouts":[]}'), "принято"],
+    ["разметка в названии дня", { v: 1, workouts: [{ id: "x", date: "2026-01-01", dayLabel: "<img src=x onerror=\"window.ВЗЛОМАН=1\">", exercises: [{ name: "Жим", sets: [{ reps: 10, weight: 50 }] }] }] }, "принято"],
+  ];
+
+  for (const [label, payload, expect] of hostile) {
+    const hc = await browser.newContext({ ...devices[DEVICE], locale: "ru-RU", timezoneId: TZ });
+    const hp = await hc.newPage();
+    await hp.goto(URL, { waitUntil: "networkidle" });
+    await hp.waitForTimeout(1500);
+    await skipIntro(hp);
+    await hp.getByRole("button", { name: "Настройки" }).click();
+    await hp.waitForTimeout(400);
+    await hp.getByRole("button", { name: /Восстановить из копии/ }).click();
+    await hp.waitForTimeout(400);
+    await hp.getByRole("textbox", { name: "Текст резервной копии" }).fill(JSON.stringify(payload));
+    await hp.getByRole("button", { name: /Восстановить из текста/ }).click();
+    await hp.waitForTimeout(1200);
+
+    const sheet = await hp.locator("div.rounded-t-2xl").last().innerText().catch(() => "");
+    const refused = /повреждена|не похоже|не удалось прочитать|не так, как должны|записей дневника в нём нет/.test(sheet);
+    if (expect === "отказ") ok(refused, `испорченная копия отклонена: ${label}`);
+
+    /* Главное: после перезапуска приложение должно открыться. */
+    await hp.reload({ waitUntil: "networkidle" });
+    await hp.waitForTimeout(2500);
+    ok(await hp.getByRole("tablist").isVisible().catch(() => false),
+      `дневник открывается после этого: ${label}`);
+
+    const broke = await hp.evaluate(() => ({ proto: {}.ВЗЛОМАН === true, xss: window.ВЗЛОМАН === 1 }));
+    ok(!broke.proto && !broke.xss, `чужой код не выполнился: ${label}`);
+    await hc.close();
+  }
+
+  /* И то же самое для повреждения, пришедшего мимо восстановления: запись
+     могла испортиться сама — оборванным сохранением, прошлой версией. */
+  const dc = await browser.newContext({ ...devices[DEVICE], locale: "ru-RU", timezoneId: TZ });
+  const dp = await dc.newPage();
+  await dp.goto(URL, { waitUntil: "networkidle" });
+  await dp.waitForTimeout(1500);
+  await dp.evaluate(async () => {
+    const db = await new Promise((r) => { const q = indexedDB.open("iron-diary"); q.onsuccess = () => r(q.result); });
+    const put = (k, v) => new Promise((r) => {
+      const t = db.transaction("kv", "readwrite").objectStore("kv").put(v, k);
+      t.onsuccess = t.onerror = () => r();
+    });
+    await put("accepted", true);
+    await put("setup", true);
+    await put("metrics", [{ id: "m1", date: "2026-01-01", weight: 80 }]);
+    await put("workouts", "поломка");
+  });
+  await dp.reload({ waitUntil: "networkidle" });
+  await dp.waitForTimeout(3000);
+  ok(await dp.getByRole("tablist").isVisible().catch(() => false),
+    "повреждённое хранилище не вешает приложение на заставке");
+  ok(await dp.getByText(/Часть записей не прочиталась/).isVisible().catch(() => false),
+    "о непрочитанных записях говорят, а не молчат");
+  ok(await dp.getByRole("button", { name: /Сохранить всё содержимое/ }).isVisible().catch(() => false),
+    "и предлагают забрать содержимое хранилища целиком");
+  /* Цела ли уцелевшая часть — испорченное поле не должно утащить остальное. */
+  const kept = await dp.evaluate(async () => {
+    const db = await new Promise((r) => { const q = indexedDB.open("iron-diary"); q.onsuccess = () => r(q.result); });
+    return new Promise((r) => { const t = db.transaction("kv").objectStore("kv").get("metrics"); t.onsuccess = () => r(t.result?.length || 0); });
+  });
+  ok(kept === 1, "уцелевшие записи не переписаны и не стёрты", `замеров: ${kept}`);
+  await dc.close();
+}
+
+section("Заголовки безопасности");
+/* Приложение статическое и никуда не ходит, но два заголовка нужны даже
+   такому. Проверяем не наличие строки в файле, а то, что браузер их вправду
+   получил: файл могли не выложить, раздача — не понять. */
+{
+  const res = await page.goto(URL, { waitUntil: "domcontentloaded" });
+  const h = res?.headers() || {};
+  const csp = h["content-security-policy"] || "";
+  ok(!!csp, "политика содержимого доезжает до браузера");
+  /* Главное в ней: чужой код, окажись он внутри, не сможет ни загрузиться
+     со стороны, ни отправить дневник наружу. */
+  ok(/default-src 'self'/.test(csp), "по умолчанию разрешено только своё");
+  ok(/connect-src 'self'/.test(csp), "соединения — только со своим адресом", "дневник наружу не уйдёт");
+  ok(/frame-ancestors 'none'/.test(csp), "приложение нельзя открыть в чужой рамке");
+  ok(/object-src 'none'/.test(csp) && /base-uri 'none'/.test(csp), "подставить чужую основу или объект нельзя");
+  /* Встроенный сценарий экрана поломки разрешён поимённо, а не «любой». */
+  ok(/script-src [^;]*'sha256-/.test(csp) && !/script-src [^;]*'unsafe-inline'/.test(csp),
+    "встроенный сценарий разрешён по отпечатку, а не оптом");
+  ok(h["x-content-type-options"] === "nosniff", "браузер не гадает тип файла");
+  ok(/no-referrer/.test(h["referrer-policy"] || ""), "по внешней ссылке не уходит, откуда пришли");
+  ok(/camera=\(\)/.test(h["permissions-policy"] || ""), "камера, микрофон и место запрещены на уровне страницы");
+  await page.waitForTimeout(800);
+}
+
 section("Шрифты");
 /* Первая установка качала 99 файлов шрифтов на 1,2 МБ — больше половины
    всего приложения. Греческий, вьетнамский и расширенная латиница в русском
@@ -1317,4 +1448,5 @@ ok(errors.length === 0, "ошибок в консоли нет", errors.slice(0,
 console.log(failed ? `\nПРОВАЛЕНО проверок: ${failed}` : "\nВсе проверки пройдены");
 
 await browser.close();
+ownServer?.kill();
 process.exit(failed ? 1 : 0);

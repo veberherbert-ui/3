@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite",
     "check": "node tools/check-data.mjs",
-    "build": "node tools/check-data.mjs && vite build && node tools/check-build.mjs",
+    "build": "node tools/check-data.mjs && vite build && node tools/headers.mjs && node tools/check-build.mjs",
     "preview": "vite preview",
     "smoke": "node tools/smoke.mjs && SMOKE_DEVICE=\"Galaxy S8\" node tools/smoke.mjs",
     "smoke:ios": "node tools/smoke.mjs",
@@ -15,7 +15,8 @@
     "icons": "node tools/make-icons.mjs",
     "shots": "node tools/shots.mjs",
     "smoke:webkit": "SMOKE_ENGINE=webkit node tools/smoke.mjs",
-    "smoke:firefox": "SMOKE_ENGINE=firefox node tools/smoke.mjs"
+    "smoke:firefox": "SMOKE_ENGINE=firefox node tools/smoke.mjs",
+    "serve": "node tools/serve.mjs"
   },
   "repository": {
     "type": "git",

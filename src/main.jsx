@@ -1,6 +1,7 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App.jsx";
+import Rescue from "./Rescue.jsx";
 import "./index.css";
 import { reloadOnUpdate } from "./lib/update.js";
 
@@ -33,6 +34,11 @@ reloadOnUpdate();
 
 createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <App />
+    {/* Последняя ограда: если падает само приложение, внутри ловить уже
+        нечем. Она умеет главное — вытащить записи до того, как что-либо
+        стирать. См. src/Rescue.jsx. */}
+    <Rescue>
+      <App />
+    </Rescue>
   </React.StrictMode>
 );

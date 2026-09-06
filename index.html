@@ -149,8 +149,15 @@
            (см. Boundary в src/App.jsx): она показывает, что именно не
            открылось, и оставляет остальное работать. */
         function booted() {
-          var root = document.getElementById("root");
-          return !!root && root.childElementCount > 0;
+          /* Отметку ставит само приложение, когда отрисовалось (см. App.jsx).
+
+             Раньше здесь считались дети в корне — и это врало: при падении
+             на полпути React оставляет пустую обёртку, предохранитель видел
+             «ребёнок есть» и молчал, а человек смотрел на пустой экран. */
+          /* "1" — приложение поднялось. "rescue" — оно упало, но
+             спасательный экран уже объясняет человеку, что делать,
+             и умеет то, чего не умеем мы: вытащить записи. */
+          return document.documentElement.hasAttribute("data-ready");
         }
 
         window.addEventListener("error", function (e) {
@@ -168,8 +175,7 @@
         /* Ничего не упало, но и не нарисовалось — значит скрипт не дошёл. */
         window.addEventListener("load", function () {
           setTimeout(function () {
-            var root = document.getElementById("root");
-            if (!root || root.childElementCount === 0) fail("приложение не отрисовалось за 6 секунд");
+            if (!booted()) fail("приложение не отрисовалось за 6 секунд");
           }, 6000);
         });
       })();

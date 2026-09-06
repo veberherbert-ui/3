@@ -21,6 +21,7 @@
    Запуск: после vite build, см. npm run build */
 
 import { readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 const problems = [];
@@ -123,6 +124,42 @@ css.forEach((f) => {
     if (src.includes(needle)) fail("оформление", `${f}: ${needle} — ${since}, а объявлена нижняя планка Safari 14.1`);
   });
 });
+
+/* ---- заголовки безопасности ---- */
+/* Политика содержимого держится на отпечатке встроенного сценария. Стоит
+   этому сценарию измениться — а он меняется при каждой сборке, в нём метка
+   версии, — и старый отпечаток перестанет совпадать. Тогда браузер откажется
+   выполнять экран поломки: тот самый, который должен работать, когда
+   не работает больше ничего. Проверяем, что отпечаток посчитан по тому,
+   что вправду лежит в странице. */
+{
+  const headersFile = new URL("../dist/_headers", import.meta.url);
+  let headers;
+  try {
+    headers = readFileSync(headersFile, "utf8");
+  } catch {
+    fail("заголовки", "нет dist/_headers — не выполнен шаг tools/headers.mjs");
+    headers = "";
+  }
+  if (headers) {
+    const csp = headers.match(/Content-Security-Policy:\s*(.+)/)?.[1] || "";
+    if (!csp) fail("заголовки", "в dist/_headers нет политики содержимого");
+    for (const need of ["default-src 'self'", "connect-src 'self'", "frame-ancestors 'none'"]) {
+      if (!csp.includes(need)) fail("заголовки", `в политике нет «${need}» — без неё она мало что даёт`);
+    }
+    if (/script-src[^;]*'unsafe-inline'/.test(csp))
+      fail("заголовки", "встроенные сценарии разрешены оптом — теряется весь смысл политики");
+
+    const html = readFileSync(new URL("../dist/index.html", import.meta.url), "utf8");
+    const inline = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)];
+    inline.forEach((m, i) => {
+      const h = createHash("sha256").update(m[1], "utf8").digest("base64");
+      if (!csp.includes(`'sha256-${h}'`))
+        fail("заголовки", `отпечаток встроенного сценария №${i + 1} не совпадает с политикой — экран поломки не выполнится`);
+    });
+    if (!inline.length) fail("заголовки", "во встроенной странице пропал экран поломки");
+  }
+}
 
 if (problems.length) {
   console.error(`\n✗ Сборка не годится для объявленных браузеров: ${problems.length}\n`);
