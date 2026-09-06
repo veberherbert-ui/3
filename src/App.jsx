@@ -42,9 +42,66 @@ const LineByDate = lazy(() => import("./Charts.jsx").then((m) => ({ default: m.L
    на одном экране, который открывают раз в жизни. */
 const QrCode = lazy(() => import("./QrCode.jsx"));
 
+/* Ограда вокруг куска приложения.
+
+   Без неё любая ошибка внутри любого места сносит всё дерево целиком:
+   React размонтирует приложение, страница остаётся пустой, срабатывает
+   экран поломки — и человек получает «приложение сломалось» вместо
+   «не открылся один график».
+
+   Для нас это не теория. Библиотека графиков зовёт structuredClone
+   и Object.hasOwn, а они появились только в Safari 15.4 — на iPhone,
+   который ни разу не обновляли, открытие графика означало бы белый экран
+   на всё приложение. Движок Safari нам недоступен для проверок, поэтому
+   такие места надо не угадывать, а огораживать.
+
+   Ограда сбрасывается сама при смене вкладки: обёртка вкладки живёт
+   с key={вкладка}, а значит пересоздаётся вместе с ней. */
+class Boundary extends React.Component {
+  constructor(p) {
+    super(p);
+    this.state = { err: null };
+  }
+  static getDerivedStateFromError(err) {
+    return { err };
+  }
+  componentDidCatch(err) {
+    /* В консоль — чтобы ошибку было видно при разборе, а не только на экране. */
+    console.error("не отработал раздел:", this.props.what || "?", err);
+  }
+  render() {
+    if (!this.state.err) return this.props.children;
+    const line = `${this.props.what || "раздел"}: ${this.state.err?.message || this.state.err}`;
+    return (
+      <div className="rounded-xl p-3" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+        <div className="f-body text-sm mb-1" style={{ color: C.chalk }}>
+          {this.props.what ? `${this.props.what} не открылся` : "Этот кусок не открылся"}
+        </div>
+        <div className="f-body text-xs mb-2 leading-relaxed" style={{ color: C.dim }}>
+          Остальное приложение работает, записи целы. Чаще всего дело в браузере
+          постарше или в оборвавшейся загрузке.
+        </div>
+        <div className="flex gap-1.5">
+          <button onClick={() => this.setState({ err: null })}
+            className="f-body flex-1 rounded-lg py-2 text-xs" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
+            Попробовать снова
+          </button>
+          {/* Сведения — чтобы было что переслать: сами мы этот телефон не увидим. */}
+          <button onClick={() => { navigator.clipboard?.writeText(`${line}\n${navigator.userAgent}`).catch(() => {}); }}
+            className="f-body flex-1 rounded-lg py-2 text-xs" style={{ background: C.surfaceHi, color: C.dim, border: `1px solid ${C.line}` }}>
+            Скопировать причину
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
+
 /** Место под график, пока он подгружается — чтобы страница не дёргалась. */
 const ChartFrame = ({ children, height = 200 }) => (
-  <Suspense fallback={<div style={{ height }} />}>{children}</Suspense>
+  <Boundary what="График">
+    <Suspense fallback={<div style={{ height }} />}>{children}</Suspense>
+  </Boundary>
 );
 
 /* ============ atoms ============ */
@@ -3472,11 +3529,17 @@ export default function App() {
           даже если список уже в самом верху. */}
       <div ref={scroller} className="flex-1 overflow-y-auto w-full max-w-xl mx-auto" role="tabpanel" id="tabpanel"
         style={{ overscrollBehavior: "contain" }} aria-labelledby={`tab-${shownTab}`}>
+        {/* Ограда на вкладку: сбой в одном разделе не должен уносить
+            остальные три вместе с приложением. Пересоздаётся вместе
+            с вкладкой, поэтому «попробовать снова» — это ещё и просто
+            переключиться туда-обратно. */}
         <div key={shownTab} className="tab-in">
+        <Boundary what={tabs.find((t) => t.id === shownTab)?.label}>
         {shownTab === "session" && <SessionTab session={session} setSession={setSession} workouts={workouts} days={days} onFinish={finishSession} goToDays={() => { setBaseView("days"); setTab("plan"); }} conditions={conditions} restOverrides={restOverrides} setRestOverride={setRestOverride} muted={muted} bodyAt={bodyAt} gear={gear} />}
         {shownTab === "plan" && <BaseTab days={days} setDays={setDays} initialView={baseView} conditions={conditions} gear={gear} setGear={setGear} profile={profile} setProfile={setProfile} workouts={workouts} />}
         {shownTab === "diary" && <DiaryTab view={diaryView} setView={setDiaryView} workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} onUpdate={updateWorkout} onAdd={addWorkout} days={days} conditions={conditions} bodyAt={bodyAt} gear={gear} metrics={metrics} bmr={bmr} restOverrides={restOverrides} />}
         {shownTab === "body" && <BodyTab metrics={metrics} profile={profile} setProfile={setProfile} onAdd={addMetric} onDelete={deleteMetric} workouts={workouts} restOverrides={restOverrides} />}
+        </Boundary>
         </div>
       </div>
 

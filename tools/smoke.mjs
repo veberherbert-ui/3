@@ -943,6 +943,58 @@ const skipIntro = async (pg) => {
   await pg.waitForTimeout(1500);
 };
 
+section("Когда ломается один кусок");
+/* Раньше ошибка в любом месте сносила всё дерево: React размонтировал
+   приложение, страница пустела, срабатывал экран поломки — и человек
+   получал «приложение сломалось» вместо «не открылся один график».
+
+   Для нас это не теория: библиотека графиков зовёт structuredClone
+   и Object.hasOwn, а они появились только в Safari 15.4. Движок Safari
+   нам недоступен, проверить там нечем — значит такие места надо
+   огораживать, а не угадывать.
+
+   Ломаем ровно то, что ломается в жизни: кусок с графиками не загрузился. */
+{
+  const brokeCtx = await browser.newContext({ ...devices[DEVICE], locale: "ru-RU", timezoneId: TZ, serviceWorkers: "block" });
+  const bp = await brokeCtx.newPage();
+  await bp.route("**/assets/Charts-*.js", (r) => r.abort());
+  await bp.goto(URL, { waitUntil: "networkidle" });
+  await bp.waitForTimeout(2000);
+  /* График рисуется только когда есть что рисовать: пустой вкладке
+     библиотека не нужна, и обрыв бы просто не вскрылся. */
+  await bp.evaluate(async (dates) => {
+    const db = await new Promise((r) => { const q = indexedDB.open("iron-diary"); q.onsuccess = () => r(q.result); });
+    const put = (k, v) => new Promise((r) => {
+      const t = db.transaction("kv", "readwrite").objectStore("kv").put(v, k);
+      t.onsuccess = t.onerror = () => r();
+    });
+    await put("accepted", true);
+    await put("setup", true);
+    await put("metrics", dates.map((d, i) => ({ id: `m${i}`, date: d, weight: 82 - i * 0.4, waist: 86 - i * 0.5 })));
+  }, [daysAgoISO(21), daysAgoISO(14), daysAgoISO(7)]);
+  await bp.reload({ waitUntil: "networkidle" });
+  await bp.waitForTimeout(1500);
+
+  /* Замеры тела рисуют график — идём туда, где обрыв точно вскроется. */
+  await bp.getByRole("tab", { name: "Тело" }).click();
+  await bp.waitForTimeout(3000);
+
+  ok(!(await bp.locator("#crash").isVisible()), "приложение не свалилось в экран поломки целиком");
+  const alive = await bp.getByRole("tablist").isVisible();
+  ok(alive, "вкладки на месте — по приложению можно ходить дальше");
+
+  const body = await bp.locator("body").innerText();
+  ok(/не открылся/.test(body), "видно, что именно не открылось",
+    body.split("\n").find((l) => /не открылся/.test(l)) || "");
+  ok(/записи целы|Остальное приложение работает/.test(body), "сказано, что остальное работает и записи целы");
+
+  /* Переключение вкладок пересоздаёт ограду — это и есть «попробовать снова». */
+  await bp.getByRole("tab", { name: "План" }).click();
+  await bp.waitForTimeout(800);
+  ok(!/не открылся/.test(await bp.locator("body").innerText()), "соседняя вкладка не заражена");
+  await brokeCtx.close();
+}
+
 section("Отдать ссылку другому человеку");
 /* Изнутри приложения ссылку взять неоткуда: у установленного нет строки
    адреса, а во вкладке лезть за ней и выделять руками — не то, что делают,
