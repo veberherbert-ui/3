@@ -1,5 +1,5 @@
 import { EXDB, GROUPS, PUSH_M, PULL_M, moveOf, BW_STATIC } from "../data/exercises.js";
-import { exTonnage, workoutTonnage, topWeight, topReps, est1RM, r1 } from "./calc.js";
+import { exTonnage, workoutTonnage, topWeight, topReps, est1RM, r1, ironKg } from "./calc.js";
 import { workoutEnergy } from "./energy.js";
 import { daysAgo } from "./dates.js";
 import { allTags } from "../data/tags.js";
@@ -183,7 +183,7 @@ export function compare(a, b, { metrics, bmr, restOverrides, bodyAt } = {}) {
   names.forEach((n) => {
     const ea = a.exercises.find((e) => e.name === n);
     const eb = b.exercises.find((e) => e.name === n);
-    const line = (ex) => (ex ? ex.sets.map((s) => (ex.bodyweight ? (+s.weight ? `${s.reps}+${s.weight}` : `${s.reps}`) : `${s.reps}×${s.weight}`)).join(" · ") : null);
+    const line = (ex) => (ex ? ex.sets.map((s) => (ex.bodyweight ? (+s.weight ? `${s.reps}+${s.weight}` : `${s.reps}`) : `${s.reps}×${ironKg(ex, s.weight)}`)).join(" · ") : null);
     rows.push({
       name: n,
       was: line(ea),

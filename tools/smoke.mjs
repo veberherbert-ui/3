@@ -271,7 +271,7 @@ ok(!!restAfter && restAfter !== restBig, "отдых продолжается п
 
 /* Метки и всё служебное — под одной кнопкой, чтобы карточка оставалась
    про ввод подходов. */
-await page.getByRole("button", { name: /метки, техника, убрать/ }).first().click();
+await page.getByRole("button", { name: /метки, вес, техника, убрать/ }).first().click();
 await page.waitForTimeout(500);
 await page.getByRole("button", { name: "отказ", exact: true }).click();
 await page.getByRole("button", { name: "болело", exact: true }).click();
@@ -467,7 +467,7 @@ ok(dragAfter[0] === dragBefore[1], "перетаскивание за ручку
 
 /* Кнопки в листе «ещё» — тот же результат для тех, кому жест не даётся. */
 const beforeOrder = await order();
-await page.getByRole("button", { name: /метки, техника, убрать/ }).first().click();
+await page.getByRole("button", { name: /метки, вес, техника, убрать/ }).first().click();
 await page.waitForTimeout(500);
 await page.getByRole("button", { name: "Переместить упражнение ниже" }).click();
 await page.waitForTimeout(400);
@@ -1025,6 +1025,92 @@ const skipIntro = async (pg) => {
   await pg.reload({ waitUntil: "networkidle" });
   await pg.waitForTimeout(1500);
 };
+
+section("Двойной блок и выгрузка тренировки");
+/* На кроссовере и подобных тренажёрах трос идёт через подвижный блок:
+   стек поднимается на половину хода рукояти, а рука тянет половину висящего
+   веса. Раньше это приходилось делить в уме перед вводом — и число со стека,
+   которое нужно выставить в зале, в записи не сохранялось вовсе. */
+{
+  const bc = await browser.newContext({ ...devices[DEVICE], locale: "ru-RU", timezoneId: TZ, acceptDownloads: true });
+  const bp = await bc.newPage();
+  await bp.goto(URL, { waitUntil: "networkidle" });
+  await bp.waitForTimeout(1500);
+  await bp.evaluate(async () => {
+    const db = await new Promise((r) => { const q = indexedDB.open("iron-diary"); q.onsuccess = () => r(q.result); });
+    const put = (k, v) => new Promise((r) => {
+      const t = db.transaction("kv", "readwrite").objectStore("kv").put(v, k);
+      t.onsuccess = t.onerror = () => r();
+    });
+    await put("accepted", true);
+    await put("setup", true);
+    await put("profile", { height: "180", age: "35", sex: "m", activity: "1.55" });
+    await put("days", [{ id: "d1", name: "Плечи", exercises: ["Махи гантелями в стороны"] }]);
+  });
+  await bp.reload({ waitUntil: "networkidle" });
+  await bp.waitForTimeout(1500);
+
+  await bp.getByRole("button", { name: /Начать тренировку/ }).click();
+  await bp.waitForTimeout(900);
+  await bp.getByRole("spinbutton", { name: /Махи гантелями в стороны, подход 1: повторения/ }).fill("12");
+  await bp.getByRole("spinbutton", { name: /Махи гантелями в стороны, подход 1: вес/ }).fill("10");
+  await bp.getByRole("button", { name: /подход 1: отметить сделанным/i }).first().click();
+  await bp.waitForTimeout(400);
+
+  /* Признак снаряда живёт в листе упражнения, а не в метках подхода:
+     он одинаков во всех подходах. */
+  await bp.getByRole("button", { name: /Махи гантелями в стороны.*метки, вес, техника/ }).first().click();
+  await bp.waitForTimeout(500);
+  const blockBtn = bp.getByRole("button", { name: /Двойной блок/ });
+  ok(await visible(blockBtn), "двойной блок переключается из листа упражнения");
+  await blockBtn.click();
+  await bp.waitForTimeout(300);
+  ok(await blockBtn.getAttribute("aria-pressed") === "true", "переключатель встал");
+  await bp.getByRole("button", { name: "Закрыть" }).last().click();
+  await bp.waitForTimeout(400);
+
+  /* В поле ввода остаётся число со стека — по нему выставлять снаряд. */
+  const inField = await bp.getByRole("spinbutton", { name: /подход 1: вес/ }).first().inputValue();
+  ok(inField === "10", "в поле остаётся то, что висит на стеке", inField);
+
+  await bp.getByRole("button", { name: /Завершить и сохранить/ }).first().click();
+  await bp.waitForTimeout(1800);
+
+  const saved = await bp.evaluate(async () => {
+    const db = await new Promise((r) => { const q = indexedDB.open("iron-diary"); q.onsuccess = () => r(q.result); });
+    return new Promise((r) => { const t = db.transaction("kv").objectStore("kv").get("workouts"); t.onsuccess = () => r(t.result); });
+  });
+  const ex = saved?.[0]?.exercises?.[0];
+  /* Признак перечисляется при сохранении поимённо — забыть его значит
+     посчитать запись вдвое тяжелее правды. Ровно так уже терялись метки. */
+  ok(ex?.block === true, "признак пережил сохранение");
+  ok(+ex?.sets?.[0]?.weight === 10, "в записи лежит число со стека, а не поделённое", String(ex?.sets?.[0]?.weight));
+
+  /* Одностороннее ×2, блок ÷2 — как человек и считал руками: (10:2)*2. */
+  const tons = saved?.[0] ? null : null;
+  await bp.getByRole("tab", { name: "Дневник" }).click();
+  await bp.waitForTimeout(1200);
+  await bp.getByRole("button", { name: /Плечи/ }).first().click();
+  await bp.waitForTimeout(800);
+  const cardText = await bp.locator("body").innerText();
+  ok(/12×5/.test(cardText), "в журнале показано железо, а не число со стека", cardText.match(/12×\d+/)?.[0] || "");
+  ok(/÷2/.test(cardText), "видно, что вес пересчитан");
+
+  /* Выгрузка одной тренировки файлом: раньше кнопка отдавала весь дневник
+     разом — простыню за всё время, которую и читать незачем. */
+  const dl = bp.waitForEvent("download", { timeout: 10000 }).catch(() => null);
+  await bp.getByRole("button", { name: /Выгрузить/ }).first().click();
+  const file = await dl;
+  ok(!!file, "тренировка выгружается файлом");
+  if (file) {
+    const txt = (await import("node:fs")).readFileSync(await file.path(), "utf8");
+    ok(/Плечи/.test(txt), "в файле та самая тренировка");
+    ok(/12×5/.test(txt), "и в нём тоже железо, а не число со стека");
+    ok(/двойной блок/.test(txt), "читающему со стороны объяснено, почему цифра такая");
+    ok(!/Замеры тела/.test(txt), "и ничего лишнего — только эта тренировка");
+  }
+  await bc.close();
+}
 
 section("Враждебная резервная копия");
 /* Единственное место, куда в приложение попадают данные, которых оно

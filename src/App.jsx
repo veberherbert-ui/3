@@ -11,13 +11,14 @@ import { today, daysAgo, fmtDate } from "./lib/dates.js";
 import {
   uid, r1, ytLink,
   exTonnage, workoutTonnage, bwKg, addedKg, perRepKg, weightNear, topWeight, topReps,
-  epley, brzycki, est1RM, readyToAdd,
+  epley, brzycki, est1RM, readyToAdd, ironKg,
   bodyFatNavy, bmrOf, bmiOf, lbmOf, ffmiOf,
 } from "./lib/calc.js";
 import { loadKey, saveKey, deleteKey, requestPersistence, storageEstimate } from "./lib/storage.js";
 import { fillPairFlags } from "./lib/migrate.js";
 import { useDragOrder, moveItem } from "./lib/reorder.js";
 import { shareOrDownload, readFileAsText, backupName, parseBackup, sanitizeStored } from "./lib/backup.js";
+import { workoutText, workoutFileName } from "./lib/report.js";
 import { restFor, fmtRest, stepRest } from "./lib/rest.js";
 import { workoutEnergy } from "./lib/energy.js";
 import { summary, movers, weeklyVolume, muscleWeek, compare, weightAdvice, rmDoubtful, painFlag } from "./lib/progress.js";
@@ -162,6 +163,10 @@ const UniTag = () => (
 /* Две гантели: в поле веса стоит одна, тоннаж считается за обе. */
 const PairTag = () => (
   <span className="f-body text-2xs rounded px-1 py-0.5 ml-1 align-middle" style={{ background: C.surfaceHi, color: C.dim, border: `1px solid ${C.line}` }}>пара</span>
+);
+/* Двойной блок: в поле веса стоит стек, а рука тянет половину. */
+const BlockTag = () => (
+  <span className="f-body text-2xs rounded px-1 py-0.5 ml-1 align-middle" style={{ background: C.blue, color: C.chalk }}>÷2</span>
 );
 
 /**
@@ -950,7 +955,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
 
   /* «8×60» — восемь по шестьдесят; «8+10» — восемь своим весом с блином
      на десять; просто «8» — восемь без утяжеления. */
-  const setsLine = (ex) => ex.sets.map((s) => (ex.bodyweight ? (+s.weight ? `${s.reps}+${s.weight}` : s.reps) : `${s.reps}×${s.weight}`)).join(" · ");
+  const setsLine = (ex) => ex.sets.map((s) => (ex.bodyweight ? (+s.weight ? `${s.reps}+${s.weight}` : s.reps) : `${s.reps}×${ironKg(ex, s.weight)}`)).join(" · ");
 
   const blankExercise = useCallback((n) => draftExercise(n, workouts), [workouts]);
 
@@ -1193,6 +1198,15 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
     }) };
     return { ...s, exercises: list };
   });
+  /* Двойной блок — свойство снаряда, а не подхода: он одинаков во всех
+     подходах упражнения, поэтому живёт на упражнении, рядом с «парой»
+     и «своим весом», а не в метках. */
+  const toggleBlock = (i) => setSession((s) => {
+    const list = [...s.exercises];
+    list[i] = { ...list[i], block: !list[i].block };
+    return { ...s, exercises: list };
+  });
+
   /* решил доделать что-то сверх плана — добавляем прямо на ходу */
   const addExercise = (n) => setSession((s) =>
     s.exercises.some((e) => e.name === n) ? s : { ...s, exercises: [...s.exercises, blankExercise(n)] });
@@ -1216,7 +1230,9 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
   const finish = (force = false) => {
     if (!force && blanks.length) { setMenu(false); setBlanksWarn(true); return; }
     const cleaned = session.exercises.map((e) => ({
-      name: e.name, bodyweight: e.bodyweight, uni: !!e.uni, pair: !!e.pair,
+      /* block едет вместе с остальными признаками снаряда: без него запись
+         посчитается по числу со стека, то есть вдвое тяжелее правды. */
+      name: e.name, bodyweight: e.bodyweight, uni: !!e.uni, pair: !!e.pair, block: !!e.block,
       tags: e.tags?.length ? e.tags : undefined,
       sets: e.sets.filter((s) => !blank(s.reps) && (e.bodyweight || !blank(s.weight)))
         /* метки подхода едут вместе с ним: без них он теряет половину смысла */
@@ -1316,7 +1332,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
                     что карточку можно двигать. */}
                 <Grip {...handleProps(i)} />
                 <div className="min-w-0 flex-1 pt-2">
-                  <div className="f-body text-sm font-medium" style={{ color: C.chalk }}>{ex.name}{ex.uni && <UniTag />}{ex.pair && <PairTag />}<RiskMark name={ex.name} conditions={conditions} /></div>
+                  <div className="f-body text-sm font-medium" style={{ color: C.chalk }}>{ex.name}{ex.uni && <UniTag />}{ex.pair && <PairTag />}{ex.block && <BlockTag />}<RiskMark name={ex.name} conditions={conditions} /></div>
                   {/* Одна служебная строка вместо трёх: что было в прошлый раз
                       и сколько отдыхать — остальное убрано под «ещё». */}
                   <div className="f-num text-2xs truncate" style={{ color: C.dim }}>
@@ -1326,7 +1342,7 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
                     <div className="f-body text-2xs" style={{ color: allTags(ex).includes("pain") ? C.redText : C.mustard }}>{tagLine(allTags(ex))}</div>
                   )}
                 </div>
-                <button onClick={() => setSheet(i)} aria-label={`«${ex.name}»: метки, техника, убрать`} className="shrink-0 flex items-center justify-center">
+                <button onClick={() => setSheet(i)} aria-label={`«${ex.name}»: метки, вес, техника, убрать`} className="shrink-0 flex items-center justify-center">
                   <MoreHorizontal size={18} color={C.dim} />
                 </button>
               </div>
@@ -1446,6 +1462,39 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
               Точечно — через номер подхода в самой карточке. */}
           <div className="f-body text-2xs mb-1.5" style={{ color: C.dim }}>Ставится на все подходы</div>
           <TagPicker tags={commonTags(session.exercises[sheet])} onToggle={(id) => toggleTag(sheet, id)} />
+          {/* Двойной блок.
+
+              На кроссовере и подобных тренажёрах трос идёт через подвижный
+              блок: стек поднимается на половину хода рукояти, а рука тянет
+              половину висящего веса. Повесил 10 — тянешь 5.
+
+              Раньше это приходилось делить в уме перед вводом. Теперь
+              пишется число со стека, а приложение делит само. */}
+          {!session.exercises[sheet].bodyweight && (
+            <>
+              <div className="f-body text-xs mt-4 mb-2" style={{ color: C.dim }}>Как считать вес</div>
+              <button
+                onClick={() => toggleBlock(sheet)}
+                aria-pressed={!!session.exercises[sheet].block}
+                className="f-body w-full rounded-xl px-3 py-3 text-sm flex items-center justify-between gap-2 text-left"
+                style={{
+                  background: session.exercises[sheet].block ? C.blue : C.surfaceHi,
+                  color: session.exercises[sheet].block ? C.chalk : C.chalk,
+                  border: `1px solid ${session.exercises[sheet].block ? "transparent" : C.line}`,
+                }}>
+                <span>
+                  Двойной блок
+                  <span className="f-body text-2xs block mt-0.5" style={{ color: session.exercises[sheet].block ? C.chalk : C.dim }}>
+                    {session.exercises[sheet].block
+                      ? "пишешь число со стека, считается половина"
+                      : "кроссовер и тренажёры, где стек идёт вполовину хода"}
+                  </span>
+                </span>
+                {session.exercises[sheet].block && <Check size={16} />}
+              </button>
+            </>
+          )}
+
           {/* Долгое нажатие есть не у всех — кому оно не даётся, переставит
               кнопками. То же решение, что и в редакторе дней. */}
           <div className="f-body text-xs mt-4 mb-2" style={{ color: C.dim }}>Порядок в тренировке</div>
@@ -1925,6 +1974,13 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
     return { ...d, exercises: ex };
   });
   const rmExercise = (i) => setDraft((d) => ({ ...d, exercises: d.exercises.filter((_, k) => k !== i) }));
+  /* Двойной блок — признак снаряда, а не подхода. Здесь он нужен затем же,
+     зачем в тренировке: запись задним числом делают ровно так же, как живую,
+     и делить в уме там не легче. */
+  const toggleBlock = (i) => setDraft((d) => ({
+    ...d,
+    exercises: d.exercises.map((e, k) => (k === i ? { ...e, block: !e.block } : e)),
+  }));
   /* Метка на одном подходе — и перевод упражнения на подходные метки,
      если оно ещё жило по-старому. */
   const toggleSetTag = (i, j, id) => setDraft((d) => {
@@ -1994,7 +2050,7 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
         {draft.exercises.map((ex, i) => (
           <div key={i} className="rounded-xl p-3" style={{ background: C.surfaceHi, border: `1px solid ${C.line}` }}>
             <div className="flex items-start justify-between gap-2 mb-2">
-              <div className="f-body text-sm min-w-0" style={{ color: C.chalk }}>{ex.name}{ex.uni && <UniTag />}{ex.pair && <PairTag />}</div>
+              <div className="f-body text-sm min-w-0" style={{ color: C.chalk }}>{ex.name}{ex.uni && <UniTag />}{ex.pair && <PairTag />}{ex.block && <BlockTag />}</div>
               <button onClick={() => rmExercise(i)} aria-label={`Убрать «${ex.name}» из записи`} className="shrink-0 flex items-center justify-center"><Trash2 size={16} color={C.dim} /></button>
             </div>
             <div className="space-y-1.5">
@@ -2014,7 +2070,23 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
                 </div>
               ))}
             </div>
-            <button onClick={() => addSet(i)} className="f-body mt-2 text-xs" style={{ color: C.mossText }}>+ подход</button>
+            <div className="flex items-center justify-between gap-2 mt-2">
+              <button onClick={() => addSet(i)} className="f-body text-xs" style={{ color: C.mossText }}>+ подход</button>
+              {/* Компактно: в редакторе и так плотно, а нажимают это редко —
+                  один раз на упражнение, а не на каждый подход. */}
+              {!ex.bodyweight && (
+                <button onClick={() => toggleBlock(i)} aria-pressed={!!ex.block}
+                  aria-label={`${ex.name}: двойной блок, вес пополам`}
+                  className="f-body rounded-lg px-2 text-2xs"
+                  style={{
+                    background: ex.block ? C.blue : "transparent",
+                    color: ex.block ? C.chalk : C.dim,
+                    border: `1px solid ${ex.block ? "transparent" : C.line}`,
+                  }}>
+                  ÷2 блок
+                </button>
+              )}
+            </div>
             <TagBlock tags={commonTags(ex)} onToggle={(id) => toggleTag(i, id)} />
           </div>
         ))}
@@ -2067,7 +2139,7 @@ function EditWorkout({ workout, onSave, onClose, workouts = [], conditions = [],
   );
 }
 
-function WorkoutCard({ w, isPR, onDelete, onEdit, bodyAt }) {
+function WorkoutCard({ w, isPR, onDelete, onEdit, onShare, bodyAt }) {
   const [open, setOpen] = useState(false);
   /* Вес тела на дату тренировки: без него подтягивания не попадают в тоннаж. */
   const body = bodyAt?.(w.date) || 0;
@@ -2097,11 +2169,11 @@ function WorkoutCard({ w, isPR, onDelete, onEdit, bodyAt }) {
           {w.exercises.map((ex, i) => (
             <div key={i} className="flex items-start justify-between gap-3 text-xs f-body py-1.5" style={{ borderTop: `1px solid ${C.line}` }}>
               <span className="min-w-0" style={{ color: C.chalk }}>
-                {ex.name}{ex.uni && <UniTag />}{ex.pair && <PairTag />}
+                {ex.name}{ex.uni && <UniTag />}{ex.pair && <PairTag />}{ex.block && <BlockTag />}
                 {allTags(ex).length > 0 && <span className="f-body block text-2xs" style={{ color: allTags(ex).includes("pain") ? C.redText : C.mustard }}>{tagLine(allTags(ex))}</span>}
               </span>
               <span className="f-num text-right shrink-0" style={{ color: C.dim }}>
-                {ex.sets.map((s) => (ex.bodyweight ? (+s.weight ? `${s.reps}+${s.weight}` : s.reps) : `${s.reps}×${s.weight}`)).join(" · ")}
+                {ex.sets.map((s) => (ex.bodyweight ? (+s.weight ? `${s.reps}+${s.weight}` : s.reps) : `${s.reps}×${ironKg(ex, s.weight)}`)).join(" · ")}
                 {/* Своим весом непонятно, откуда взялись килограммы в тоннаже —
                     подписываем, во что оценён один повтор. */}
                 {ex.bodyweight && bwKg(ex.name, body) && (
@@ -2117,6 +2189,12 @@ function WorkoutCard({ w, isPR, onDelete, onEdit, bodyAt }) {
             <button onClick={() => onEdit(w)} className="f-body flex-1 rounded-lg py-2 text-xs flex items-center justify-center gap-1.5" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
               <Pencil size={12} /> Изменить
             </button>
+            {/* Текст одной тренировки файлом. Раньше выгружался весь дневник
+                разом: простыня за всё время, которую и читать незачем,
+                и переслать неловко. Показать хотят вчерашнюю. */}
+            <button onClick={() => onShare(w)} className="f-body flex-1 rounded-lg py-2 text-xs flex items-center justify-center gap-1.5" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
+              <Share2 size={12} /> Выгрузить
+            </button>
             <ConfirmButton onConfirm={() => onDelete(w.id)} question="Удалить тренировку?" className="f-body rounded-lg px-3 py-2 text-xs flex items-center justify-center gap-1.5" style={{ background: C.surfaceHi, color: C.redText, border: `1px solid ${C.line}` }}>
               <Trash2 size={12} /> Удалить
             </ConfirmButton>
@@ -2127,7 +2205,7 @@ function WorkoutCard({ w, isPR, onDelete, onEdit, bodyAt }) {
   );
 }
 
-function JournalTab({ workouts, onDelete, onExport, onUpdate, onAdd, days, conditions, bodyAt, gear }) {
+function JournalTab({ workouts, onDelete, onUpdate, onAdd, days, conditions, bodyAt, gear, say }) {
   const [editing, setEditing] = useState(null);
   /* запись задним числом: сначала выбираем день, потом заполняем ту же форму */
   const [pickDay, setPickDay] = useState(false);
@@ -2144,6 +2222,15 @@ function JournalTab({ workouts, onDelete, onExport, onUpdate, onAdd, days, condi
       durationMin: null,
       exercises: (day?.exercises || []).map((n) => draftExercise(n, workouts)),
     });
+  };
+
+  /* Тренировка обычным текстом, файлом. На iPhone это открывает системное
+     «Поделиться» — оттуда и в переписку, и в «Файлы»; где его нет, файл
+     просто скачивается. */
+  const shareWorkout = async (w) => {
+    const res = await shareOrDownload(workoutFileName(w), workoutText(w, bodyAt?.(w.date) || 0), "text/plain");
+    if (res === "copied") say("Тренировка в буфере обмена");
+    else if (res === "failed") say("Выгрузить не вышло");
   };
 
   /* Всё это считается по всей истории тренировок. Без запоминания пересчёт
@@ -2193,12 +2280,10 @@ function JournalTab({ workouts, onDelete, onExport, onUpdate, onAdd, days, condi
       <button onClick={() => setPickDay(true)} className="f-body w-full mt-2 rounded-xl py-3 text-sm flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
         <CalendarPlus size={16} /> Записать прошлую тренировку
       </button>
-      <button onClick={onExport} className="f-body w-full mt-2 rounded-xl py-2.5 text-sm flex items-center justify-center gap-2" style={{ background: C.surfaceHi, color: C.chalk, border: `1px solid ${C.line}` }}>
-        <Share2 size={15} /> Выгрузить дневник текстом
-      </button>
+
       <div className="mt-4 space-y-2.5">
         {!sorted.length && <div className="f-body text-sm text-center py-12" style={{ color: C.dim }}>Пусто. Собери первую тренировку во вкладке «Сессия».</div>}
-        {sorted.map((w) => <WorkoutCard key={w.id} w={w} isPR={prs.has(w.id)} onDelete={onDelete} onEdit={setEditing} bodyAt={bodyAt} />)}
+        {sorted.map((w) => <WorkoutCard key={w.id} w={w} isPR={prs.has(w.id)} onDelete={onDelete} onEdit={setEditing} onShare={shareWorkout} bodyAt={bodyAt} />)}
       </div>
 
       {editing && (
@@ -2544,7 +2629,7 @@ function ProgressTab({ workouts, bodyAt, metrics, bmr, restOverrides }) {
         let heavy = null;
         let most = null;
         ex.sets.forEach((set) => {
-          const kg = bw ? 0 : +set.weight || 0;
+          const kg = bw ? 0 : ironKg(ex, set.weight);
           const reps = +set.reps || 0;
           if (!reps) return;
           if (!heavy || kg > heavy.kg || (kg === heavy.kg && reps > heavy.reps)) heavy = { kg, reps };
@@ -2862,7 +2947,7 @@ function WorkoutEnergyCard({ workouts, metrics, bmr, restOverrides }) {
 /* Дневник: и записи, и итоги. Раньше это были две вкладки — «Журнал»
    и «Графики», хотя обе отвечают на один вопрос «как идёт». Сравнение при
    этом жило через экран от тренировок, которые сравнивает. */
-function DiaryTab({ view, setView, workouts, onDelete, onExport, onUpdate, onAdd, days, conditions, bodyAt, gear,
+function DiaryTab({ view, setView, workouts, onDelete, onUpdate, onAdd, days, conditions, bodyAt, gear, say,
                     metrics, bmr, restOverrides }) {
   return (
     <div>
@@ -2875,7 +2960,7 @@ function DiaryTab({ view, setView, workouts, onDelete, onExport, onUpdate, onAdd
         </div>
       </div>
       {view === "records"
-        ? <JournalTab workouts={workouts} onDelete={onDelete} onExport={onExport} onUpdate={onUpdate} onAdd={onAdd} days={days} conditions={conditions} bodyAt={bodyAt} gear={gear} />
+        ? <JournalTab workouts={workouts} onDelete={onDelete} onUpdate={onUpdate} onAdd={onAdd} days={days} conditions={conditions} bodyAt={bodyAt} gear={gear} say={say} />
         : (
           <>
             <ProgressTab workouts={workouts} bodyAt={bodyAt} metrics={metrics} bmr={bmr} restOverrides={restOverrides} />
@@ -3385,38 +3470,6 @@ export default function App() {
     return bmrOf({ lbm: lbmOf(kg, bf), bodyKg: kg, height: profile.height, age: profile.age, sex: profile.sex });
   }, [metrics, profile]);
 
-  const buildExport = () => {
-    const lines = ["# Тренировочный дневник — выгрузка", ""];
-    if (profile.height) lines.push(`Профиль: рост ${profile.height} см, возраст ${profile.age || "—"}`, "");
-    if (metrics.length) {
-      lines.push("## Замеры тела");
-      [...metrics].sort((a, b) => a.date.localeCompare(b.date)).forEach((m) => {
-        const parts = MEASURES.filter((x) => m[x.k] != null).map((x) => `${x.l} ${m[x.k]}`);
-        const f = bodyFatNavy(m, profile);
-        lines.push(`${m.date}: ${parts.join(", ")}${f != null ? ` (жир ~${f}%)` : ""}`);
-      });
-      lines.push("");
-    }
-    lines.push("## Тренировки");
-    [...workouts].sort((a, b) => a.date.localeCompare(b.date)).forEach((w) => {
-      lines.push("", `### ${w.date} — ${w.dayLabel} — тоннаж ${workoutTonnage(w, bodyAt(w.date))} кг${w.durationMin ? `, ${w.durationMin} мин` : ""}`);
-      w.exercises.forEach((ex) => {
-        const s = ex.sets.map((x) => (ex.bodyweight ? (+x.weight ? `${x.reps}+${x.weight}кг` : `${x.reps}`) : `${x.reps}×${x.weight}`)).join(", ");
-        const rm = est1RM(ex);
-        const own = ex.bodyweight ? bwKg(ex.name, bodyAt(w.date)) : null;
-        const how = [ex.uni && "каждой стороной", ex.pair && "вес одной гантели"].filter(Boolean).join(", ");
-        const marks = tagLine(allTags(ex));
-        /* Знак вопроса у максимума, взятого корпусом или на половине
-           амплитуды: формула этого не видит, а человек, читающий выгрузку,
-           должен. */
-        const doubt = rmDoubtful(ex) ? "?" : "";
-        lines.push(`- ${ex.name}${how ? ` [${how}]` : ""}: ${s}${own ? ` [свой вес ~${own} кг]` : ""}${rm ? ` (расч.1ПМ ${rm}${doubt})` : ""}${marks ? ` — ${marks}` : ""}`);
-      });
-      if (w.note) lines.push(`- заметка: ${w.note}`);
-    });
-    setExportText(lines.join("\n")); setCopied(false);
-  };
-
   /** Состояния здоровья — из них берутся предупреждения по всему приложению. */
   const conditions = useMemo(() => profile.conditions || [], [profile.conditions]);
 
@@ -3593,7 +3646,7 @@ export default function App() {
         <Boundary what={tabs.find((t) => t.id === shownTab)?.label}>
         {shownTab === "session" && <SessionTab session={session} setSession={setSession} workouts={workouts} days={days} onFinish={finishSession} goToDays={() => { setBaseView("days"); setTab("plan"); }} conditions={conditions} restOverrides={restOverrides} setRestOverride={setRestOverride} muted={muted} bodyAt={bodyAt} gear={gear} />}
         {shownTab === "plan" && <BaseTab days={days} setDays={setDays} initialView={baseView} conditions={conditions} gear={gear} setGear={setGear} profile={profile} setProfile={setProfile} workouts={workouts} />}
-        {shownTab === "diary" && <DiaryTab view={diaryView} setView={setDiaryView} workouts={workouts} onDelete={deleteWorkout} onExport={buildExport} onUpdate={updateWorkout} onAdd={addWorkout} days={days} conditions={conditions} bodyAt={bodyAt} gear={gear} metrics={metrics} bmr={bmr} restOverrides={restOverrides} />}
+        {shownTab === "diary" && <DiaryTab view={diaryView} setView={setDiaryView} workouts={workouts} onDelete={deleteWorkout} say={say} onUpdate={updateWorkout} onAdd={addWorkout} days={days} conditions={conditions} bodyAt={bodyAt} gear={gear} metrics={metrics} bmr={bmr} restOverrides={restOverrides} />}
         {shownTab === "body" && <BodyTab metrics={metrics} profile={profile} setProfile={setProfile} onAdd={addMetric} onDelete={deleteMetric} workouts={workouts} restOverrides={restOverrides} />}
         </Boundary>
         </div>
