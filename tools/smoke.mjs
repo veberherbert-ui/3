@@ -1026,6 +1026,74 @@ const skipIntro = async (pg) => {
   await pg.waitForTimeout(1500);
 };
 
+section("Свернуть отработанное упражнение");
+/* Последняя галочка складывает карточку в строку — это было. А вот
+   развернуть можно было только в одну сторону: заглянул поправить цифру,
+   и упражнение осталось раскрытым до конца тренировки, занимая экран
+   полями, которые уже не нужны. Тем же дефектом ломался и повторный
+   автосворот: признак «раскрыто вручную» ставился навсегда. */
+{
+  const fc = await browser.newContext({ ...devices[DEVICE], locale: "ru-RU", timezoneId: TZ });
+  const fp = await fc.newPage();
+  await fp.goto(URL, { waitUntil: "networkidle" });
+  await fp.waitForTimeout(1500);
+  await fp.evaluate(async () => {
+    const db = await new Promise((r) => { const q = indexedDB.open("iron-diary"); q.onsuccess = () => r(q.result); });
+    const put = (k, v) => new Promise((r) => {
+      const t = db.transaction("kv", "readwrite").objectStore("kv").put(v, k);
+      t.onsuccess = t.onerror = () => r();
+    });
+    await put("accepted", true);
+    await put("setup", true);
+    await put("profile", { height: "180", age: "35", sex: "m", activity: "1.55" });
+    await put("days", [{ id: "d1", name: "Плечи", exercises: ["Махи гантелями в стороны"] }]);
+  });
+  await fp.reload({ waitUntil: "networkidle" });
+  await fp.waitForTimeout(1500);
+  await fp.getByRole("button", { name: /Начать тренировку/ }).click();
+  await fp.waitForTimeout(900);
+
+  const NAME = "Махи гантелями в стороны";
+  const fold = fp.getByRole("button", { name: `Свернуть «${NAME}»` });
+  const packed = fp.getByRole("button", { name: new RegExp(`${NAME}`) }).first();
+
+  /* Пока не всё отмечено — сворачивать нечего, и кнопки быть не должно. */
+  ok(!(await fold.isVisible().catch(() => false)), "у недоделанного упражнения кнопки сворота нет");
+
+  const nSets = await fp.getByRole("button", { name: new RegExp(`${NAME}, подход \\d+: отметить сделанным`) }).count();
+  for (let k = 1; k <= nSets; k++) {
+    await fp.getByRole("spinbutton", { name: new RegExp(`${NAME}, подход ${k}: повторения`) }).fill("12");
+    await fp.getByRole("spinbutton", { name: new RegExp(`${NAME}, подход ${k}: вес`) }).fill("10");
+    await fp.getByRole("button", { name: new RegExp(`${NAME}, подход ${k}: отметить сделанным`) }).click();
+    await fp.waitForTimeout(350);
+  }
+  await fp.waitForTimeout(600);
+  const collapsed = async () =>
+    (await fp.getByRole("spinbutton", { name: new RegExp(`${NAME}, подход 1: повторения`) }).count()) === 0;
+  ok(await collapsed(), "последняя галочка сложила упражнение в строку");
+
+  /* Раскрываем как человек — нажатием на строку. */
+  await packed.click();
+  await fp.waitForTimeout(500);
+  ok(!(await collapsed()), "строка раскрывается обратно");
+  ok(await visible(fold), "и у раскрытого есть чем свернуть");
+  await fold.click();
+  await fp.waitForTimeout(500);
+  ok(await collapsed(), "кнопка сворачивает обратно");
+
+  /* Второй заход: снять галочку и поставить снова. Раньше после этого
+     упражнение оставалось развёрнутым навсегда. */
+  await packed.click();
+  await fp.waitForTimeout(500);
+  await fp.getByRole("button", { name: new RegExp(`${NAME}, подход ${nSets}: снять отметку`) }).click();
+  await fp.waitForTimeout(400);
+  ok(!(await collapsed()), "со снятой галочкой упражнение раскрыто — там есть что доделать");
+  await fp.getByRole("button", { name: new RegExp(`${NAME}, подход ${nSets}: отметить сделанным`) }).click();
+  await fp.waitForTimeout(700);
+  ok(await collapsed(), "и складывается снова, а не только в первый раз");
+  await fc.close();
+}
+
 section("Двойной блок и выгрузка тренировки");
 /* На кроссовере и подобных тренажёрах трос идёт через подвижный блок:
    стек поднимается на половину хода рукояти, а рука тянет половину висящего

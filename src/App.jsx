@@ -1144,6 +1144,13 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
       list[i] = e;
       return { ...prev, exercises: list, rest: { until: Date.now() + total * 1000, total, exName: ex.name } };
     });
+    /* Последняя галочка складывает карточку — и складывает каждый раз,
+       а не только в первый. Раньше признак «человек раскрыл вручную»
+       ставился навсегда: стоило открыть отработанное упражнение, снять
+       галочку и поставить обратно — оно так и оставалось развёрнутым. */
+    if (ex.sets.every((s, k) => k === j || s.done)) {
+      setOpened((o) => (o[ex.name] ? { ...o, [ex.name]: false } : o));
+    }
   };
 
   const untick = (i, j) => {
@@ -1342,6 +1349,20 @@ function SessionTab({ session, setSession, workouts, days, onFinish, goToDays, c
                     <div className="f-body text-2xs" style={{ color: allTags(ex).includes("pain") ? C.redText : C.mustard }}>{tagLine(allTags(ex))}</div>
                   )}
                 </div>
+                {/* Свернуть обратно.
+
+                    Складывалось оно само — последней галочкой, — а вот
+                    развернуть можно было только в одну сторону: заглянул
+                    поправить цифру, и упражнение осталось раскрытым до конца
+                    тренировки, занимая экран тремя полями, которые уже
+                    не нужны. Кнопка появляется только когда сворачивать
+                    есть что: все подходы отмечены. */}
+                {filled.length === ex.sets.length && filled.length > 0 && (
+                  <button onClick={() => setOpened((o) => ({ ...o, [ex.name]: false }))}
+                    aria-label={`Свернуть «${ex.name}»`} className="shrink-0 flex items-center justify-center">
+                    <ChevronUp size={18} color={C.dim} />
+                  </button>
+                )}
                 <button onClick={() => setSheet(i)} aria-label={`«${ex.name}»: метки, вес, техника, убрать`} className="shrink-0 flex items-center justify-center">
                   <MoreHorizontal size={18} color={C.dim} />
                 </button>
